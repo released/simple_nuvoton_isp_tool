@@ -1,5 +1,10 @@
 # SimpleProgrammingTool
 
+Repository and checkout directory: `simple_nuvoton_isp_tool`.
+[GitHub repository](https://github.com/released/simple_nuvoton_isp_tool).
+The folder/repository rename preserves `SimpleProgrammingTool.exe`, the Visual
+Studio project names and `simple_programming_tool.ini` for compatibility.
+
 Windows MFC GUI tool for programming a Nuvoton target MCU. The tool currently supports:
 
 - `FW Upload (I2C)` through an M032 EVB programming bridge over USB HID or framed VCOM.

@@ -2,7 +2,18 @@
 
 ## Current State
 
-`simple_programming_tool` is the standalone firmware programming workspace split out from `simple_pmbus_smbus_tool`.
+### Folder/repository naming (2026-10-14)
+
+Canonical repository/checkout directory: `simple_nuvoton_isp_tool`.
+The original GitHub repository was renamed in place (ID1291709517, public/main
+unchanged); origin now uses the new URL. Local directory rename is pending:
+normal/native moves were denied by Windows, so do not claim the path moved.
+Project/EXE/INI names and protocol behavior remain unchanged. The user's
+pre-existing build/simple_programming_tool.ini change is preserved and must
+not be included in this rename commit. Post-move build, naming-document commit/
+push and remote commit verification are pending.
+
+`simple_nuvoton_isp_tool` is the standalone firmware programming workspace originally named `simple_programming_tool`, split out from `simple_pmbus_smbus_tool`.
 
 The PC GUI builds as `build\SimpleProgrammingTool.exe` and currently exposes three FW upload tabs: I2C via HID/VCOM bridge, direct UART ISP, and XMODEM transfer. The I2C tab uses the M032 EVB as a USB HID or VCOM to I2C host bridge. The UART ISP and XMODEM tabs open direct COM ports to target bootloader firmware.
 

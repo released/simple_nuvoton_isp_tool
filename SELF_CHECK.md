@@ -1,5 +1,14 @@
 # SELF_CHECK.md
 
+## Folder/repository rename gate (2026-10-14)
+
+- PASS: GitHub renamed in place to simple_nuvoton_isp_tool; same repository
+  ID, public visibility and main branch. origin updated to the new URL.
+- PASS: project/EXE/INI identities unchanged; the existing user INI edit is
+  preserved and not selected for upload.
+- NOT RUN: local folder rename/post-move build (Windows access denied).
+- PENDING: naming-document commit/push and remote commit verification.
+
 ## Current Verification Results
 
 Date: 2026-07-06

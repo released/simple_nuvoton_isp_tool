@@ -2,7 +2,7 @@
 
 ## Summary
 
-Adding VCOM to `simple_programming_tool` is feasible as a second transport layer after the HID split is stable.
+Adding VCOM to `simple_nuvoton_isp_tool` is feasible as a second transport layer after the HID split is stable. The retained application/INI identifiers use their original names for compatibility.
 
 As of 2026-07-06, the PC tool has a VCOM transport path behind `BridgeService`. The shared Nuvoton I2C ISP programming state machine is still used for both HID and VCOM. Hardware validation still depends on matching M032 bridge firmware that parses the framed VCOM commands and issues the same I2C host operations.
 

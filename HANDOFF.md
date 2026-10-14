@@ -6,14 +6,23 @@
 
 Canonical repository/checkout directory: `simple_nuvoton_isp_tool`.
 The original GitHub repository was renamed in place (ID1291709517, public/main
-unchanged); origin now uses the new URL. Local directory rename is pending:
-normal/native moves were denied by Windows, so do not claim the path moved.
+unchanged); origin now uses the new URL. Local directory rename succeeded after
+the user closed VS Code/terminals; the complete .git/worktree moved together.
 Project/EXE/INI names and protocol behavior remain unchanged. The user's
 pre-existing build/simple_programming_tool.ini change is preserved and must
 not be included in this rename commit. Naming docs committed/pushed as8bd9206;
 local/remote main equality verified. Modified Markdown links/fences and
-whitespace PASS; workspace clean audit PASS24 scripts. Post-move build remains
-NOT RUN until the directory move succeeds.
+whitespace PASS; workspace clean audit PASS24 scripts. Local firmware_image_path
+was rebased to the new folder without changing other INI options. The pre-existing
+INI edit and new path migration remain local, excluded from upload. Post-move
+Debug/Release x64 builds PASS0warnings/0errors from the new path. Validation
+disabled the automatic pre-build version event via PreBuildEventUseInBuild=false
+to keep resource/version identifiers unchanged. Original delivery EXE bytes
+were preserved; rebuilt Release, logs and original EXE/INI backups are outside
+Git in codex-folder-rename-57412d53ee78419d8fe063cf616db64d.
+Startup/UI smoke NOT RUN: Computer Use native pipe unavailable after retry/
+reset. Hardware/firmware programming NOT RUN. No runtime source was changed,
+and no compiled artifact, private setting, or log is selected for upload.
 
 `simple_nuvoton_isp_tool` is the standalone firmware programming workspace originally named `simple_programming_tool`, split out from `simple_pmbus_smbus_tool`.
 

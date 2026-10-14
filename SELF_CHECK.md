@@ -6,7 +6,13 @@
   ID, public visibility and main branch. origin updated to the new URL.
 - PASS: project/EXE/INI identities unchanged; the existing user INI edit is
   preserved and not selected for upload.
-- NOT RUN: local folder rename/post-move build (Windows access denied).
+- PASS: local folder renamed after VS Code/terminals closed; .git/worktree and
+  user data preserved. INI firmware path rebased locally, other options kept.
+- PASS: post-move Debug/Release x64 builds0warnings/0errors; pre-build version
+  event disabled for validation. Original delivery EXE bytes preserved.
+- PASS: rebuilt verifiers/logs/backups outside Git; no EXE/INI/logs staged.
+- NOT RUN: startup/UI smoke (desktop native pipe unavailable after retry/reset);
+  physical I2C/UART/HID/XMODEM and firmware flashing not performed.
 - PASS: naming docs committed/pushed as8bd9206; local/remote main equality verified.
 - PASS: modified Markdown links/fences and whitespace; clean audit24 scripts.
 

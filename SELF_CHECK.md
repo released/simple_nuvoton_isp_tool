@@ -7,7 +7,8 @@
 - PASS: project/EXE/INI identities unchanged; the existing user INI edit is
   preserved and not selected for upload.
 - NOT RUN: local folder rename/post-move build (Windows access denied).
-- PENDING: naming-document commit/push and remote commit verification.
+- PASS: naming docs committed/pushed as8bd9206; local/remote main equality verified.
+- PASS: modified Markdown links/fences and whitespace; clean audit24 scripts.
 
 ## Current Verification Results
 

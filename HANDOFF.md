@@ -10,8 +10,10 @@ unchanged); origin now uses the new URL. Local directory rename is pending:
 normal/native moves were denied by Windows, so do not claim the path moved.
 Project/EXE/INI names and protocol behavior remain unchanged. The user's
 pre-existing build/simple_programming_tool.ini change is preserved and must
-not be included in this rename commit. Post-move build, naming-document commit/
-push and remote commit verification are pending.
+not be included in this rename commit. Naming docs committed/pushed as8bd9206;
+local/remote main equality verified. Modified Markdown links/fences and
+whitespace PASS; workspace clean audit PASS24 scripts. Post-move build remains
+NOT RUN until the directory move succeeds.
 
 `simple_nuvoton_isp_tool` is the standalone firmware programming workspace originally named `simple_programming_tool`, split out from `simple_pmbus_smbus_tool`.
 

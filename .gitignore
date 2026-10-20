@@ -10,6 +10,7 @@ teraterm.log
 # Local raw screenshots may contain machine paths.
 # README uses sanitized copies under docs/images/.
 FW_Upload_*.jpg
+/tmp/private_screenshots/
 
 # PC build outputs
 build/*

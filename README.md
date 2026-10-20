@@ -14,6 +14,14 @@ Windows MFC GUI tool for programming a Nuvoton target MCU. The tool currently su
 
 The firmware image is selected once at the top of the UI and reused by every upload tab.
 
+## Layout And Clean
+
+Source remains under `src`, automation under `scripts`, and supporting
+images/guides under `docs`. Existing firmware/vendor trees keep their paths.
+`scripts/clean_mfc.bat` removes only known compiler files after path/link
+validation; EXE/INI/DLL/data/log/evidence/unknown files are preserved, including
+nested output directories. Older clean entry points remain compatible.
+
 ## Scope
 
 - Bridge board: M032 EVB

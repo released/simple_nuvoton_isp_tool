@@ -1,5 +1,16 @@
 # HANDOFF.md
 
+## Layout / Clean Verification 2026-10-20
+
+- Application/transport/firmware behavior was not refactored; existing conforming source layout remains intact.
+- Build: PASS: scripts/build_mfc.ps1 -Configuration Release -Platform x64 -CloseRunningTool $false; 0 warnings/errors, normal generated version 1.0.0.038.
+- Runtime: PASS: isolated captioned frame/startup/normal close, exit 0, no real INI or hardware connection.
+- PASS: shared verifier with `-CleanActualProject -CheckNestedDelivery -CheckReparseRejection`: help is non-destructive, object removed, 17 nested delivery/runtime sentinels plus source retained, repeat-clean and junction rejection PASS. 2 actual protected build files unchanged (SHA-256).
+- Five already-ignored root FW_Upload_*.jpg originals moved to ignored tmp/private_screenshots with no overwrite and SHA-256 preservation. Existing sanitized public docs/images copies and README links remain unchanged. Never stage the originals.
+- Pre-existing modified build/simple_programming_tool.ini remains local, untouched and excluded from staging.
+- NOT RUN: physical devices, destructive workflows, firmware rebuild/programming, complete UI/DPI and new Debug acceptance.
+- Commit/push or local-only state is recorded in workspace `#READ_ME_FIRST#/PROJECT_LAYOUT_MIGRATION.md`.
+
 ## Current State
 
 ### Folder/repository naming (2026-10-14)

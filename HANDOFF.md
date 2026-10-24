@@ -1,5 +1,21 @@
 # HANDOFF.md
 
+## Verified x64 EXE slimming 2026-10-25
+
+- EXE 3036672 -> 944128 bytes; formal SHA
+  754D3FE8F6042CF55170472CB0A338CBF48D9C15C74A38E1EF8E84CFE1340507.
+- Release x64 canonical build and isolated Debug PASS; native file-dialog open/cancel, controls,
+  matching child-control counts and normal exit 0 PASS. 15 AB/BA pairs PASS.
+- Original five-pair startup gate FAIL is retained in the raw report. A single
+  predeclared 15-pair confirmation PASS used the unchanged calibration formula;
+  no failure was deleted and no threshold was relaxed after candidate timing.
+- Actual clean removed 40 compiler files; 2 protected actual files SHA
+  unchanged. 17 nested fixture files/source, help/idempotence and root INI hashes PASS.
+- Existing modified private build/simple_programming_tool.ini remains unstaged.
+- Raw sanitized evidence: docs/verification/exe-slimming-20261025.json.
+  Physical devices, unrelated firmware, visual/DPI/clean-PC/Win32 NOT RUN.
+
+
 ## Layout / Clean Verification 2026-10-20
 
 - Application/transport/firmware behavior was not refactored; existing conforming source layout remains intact.

@@ -1,5 +1,17 @@
 # AGENTS.md
 
+## Verified x64 size configuration (2026-10-25)
+
+- Only x64 defines _AFX_NO_MFC_CONTROLS_IN_DIALOGS after standard/common/custom
+  control review. Reassess before adding CMFC controls; Win32 is not changed.
+- Keep /O2, /GL, /MT, /GS, PE security, architecture, protocol and existing features.
+- Use isolated hash-matched startup/control/Debug/close checks and scoped paired
+  measurements; no user INIs, device commands or unrelated full-suite reruns.
+- Preserve the preexisting modified personal INI unstaged; never publish its values.
+- Actual results and scope: SELF_CHECK.md; raw sanitized performance evidence in
+  docs/verification/exe-slimming-20261025.json.
+
+
 ## Layout / Clean Rules
 
 - Follow workspace `#READ_ME_FIRST#/PROJECT_LAYOUT.md`; keep current source/module/firmware/protocol paths stable unless a verified move is needed.

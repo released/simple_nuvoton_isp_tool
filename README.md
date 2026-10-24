@@ -14,6 +14,17 @@ Windows MFC GUI tool for programming a Nuvoton target MCU. The tool currently su
 
 The firmware image is selected once at the top of the UI and reused by every upload tab.
 
+## Release EXE size reduction (2026-10-25)
+
+Release x64 EXE: 3,036,672 -> 944,128 bytes.
+Unused MFC control registration is excluded; static runtime, security and device
+features remain.
+Isolated startup/controls/Debug/normal-close and 15 paired performance samples
+passed. Physical-device, visual/DPI and clean-PC acceptance are not claimed.
+Existing personal settings are preserved and excluded from this publication.
+See SELF_CHECK.md and docs/verification/exe-slimming-20261025.json for evidence.
+
+
 ## Layout And Clean
 
 Source remains under `src`, automation under `scripts`, and supporting

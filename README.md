@@ -1,9 +1,6 @@
 # SimpleProgrammingTool
 
-Repository and checkout directory: `simple_nuvoton_isp_tool`.
 [GitHub repository](https://github.com/released/simple_nuvoton_isp_tool).
-The folder/repository rename preserves `SimpleProgrammingTool.exe`, the Visual
-Studio project names and `simple_programming_tool.ini` for compatibility.
 
 Windows MFC GUI tool for programming a Nuvoton target MCU. The tool currently supports:
 
@@ -14,24 +11,6 @@ Windows MFC GUI tool for programming a Nuvoton target MCU. The tool currently su
 
 The firmware image is selected once at the top of the UI and reused by every upload tab.
 
-## Release EXE size reduction (2026-10-25)
-
-Release x64 EXE: 3,036,672 -> 944,128 bytes.
-Unused MFC control registration is excluded; static runtime, security and device
-features remain.
-Isolated startup/controls/Debug/normal-close and 15 paired performance samples
-passed. Physical-device, visual/DPI and clean-PC acceptance are not claimed.
-Existing personal settings are preserved and excluded from this publication.
-See SELF_CHECK.md and docs/verification/exe-slimming-20261025.json for evidence.
-
-
-## Layout And Clean
-
-Source remains under `src`, automation under `scripts`, and supporting
-images/guides under `docs`. Existing firmware/vendor trees keep their paths.
-`scripts/clean_mfc.bat` removes only known compiler files after path/link
-validation; EXE/INI/DLL/data/log/evidence/unknown files are preserved, including
-nested output directories. Older clean entry points remain compatible.
 
 ## Scope
 
@@ -310,26 +289,8 @@ The 4KB LDROM CRC-validating target sample expects the APP image or post-build s
 - `docs\MFC_DPI_SCALING_GUIDE.md` - GUI DPI scaling notes for 100%, 125%, and 150%.
 - `docs\images\` - sanitized README screenshots.
 
-## GitHub Hygiene
+## Compiler Cleanup
 
-Before publishing, confirm that only source, documentation, and sanitized images are staged.
-
-The `.gitignore` intentionally keeps:
-
-- `build\SimpleProgrammingTool.exe` as the ready-to-run PC tool.
-- `build\simple_programming_tool.ini` as the default settings file.
-
-The `.gitignore` intentionally excludes:
-
-- PC build intermediates under `build\obj\` and debug/link artifacts under `build\`.
-- Keil `obj/`, `lst/`, `.uvguix.*`, `.uvoptx`, `Nu_Link_Driver.ini`, and build logs.
-- GCC/Eclipse local `preferences.ini`.
-- Root `FW_Upload_*.jpg` screenshots because they may contain local machine paths. Use `docs/images/*.png` in documentation instead.
-
-Suggested pre-upload checks:
-
-```bat
-git status --ignored
-git add --dry-run .
-rg -n --hidden --glob "!build/**" --glob "!demo_code/**/Keil/obj/**" --glob "!demo_code/**/Keil/lst/**" --glob "!demo_code/**/KEIL/obj/**" --glob "!demo_code/**/KEIL/lst/**" "[A-Z]:\\\\|Users\\\\" .
-```
+Run `scripts/clean_mfc.bat` to remove compiler intermediates. The executable,
+INI settings, firmware images and user data are retained. Keep personal paths
+and settings files private.

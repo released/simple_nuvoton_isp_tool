@@ -9,6 +9,8 @@
 #include <utility>
 
 #include "../core/text_utils.h"
+#include "../core/aprom_programmer.h"
+#include "../core/firmware_image.h"
 #include "../hid/hid_scan.h"
 #include "layout_utils.h"
 
@@ -46,6 +48,7 @@ constexpr std::uint16_t kNuvotonUsbIspPid = 0x3F00u;
 constexpr std::uint16_t kNuvotonLegacyUsbIspPid = 0xA316u;
 
 bool IsCancelError(const std::exception& e) {
+    if (dynamic_cast<const mfc_tool::core::ProgrammingOutcomeUnknown*>(&e) != nullptr) return false;
     return std::string(e.what()).find("cancelled") != std::string::npos ||
         std::string(e.what()).find("canceled") != std::string::npos;
 }
@@ -284,6 +287,9 @@ void CUsbHidIspTab::RefreshDevices() {
 }
 
 void CUsbHidIspTab::UpdateEnableState() {
+    if (operations_ && operations_->OutcomeUnknown()) {
+        SetTargetReady(false, L"Session: programming outcome unknown - no replay");
+    }
     if (!::IsWindow(connect_hid_btn_.GetSafeHwnd())) {
         return;
     }
@@ -299,9 +305,9 @@ void CUsbHidIspTab::UpdateEnableState() {
     mfc_tool::ui::SafeEnableWindow(disconnect_hid_btn_, connected && !busy_);
     mfc_tool::ui::SafeEnableWindow(connect_target_btn_, !busy_);
     mfc_tool::ui::SafeEnableWindow(get_device_btn_, !busy_);
-    mfc_tool::ui::SafeEnableWindow(program_btn_, !busy_ && image_loaded);
-    mfc_tool::ui::SafeEnableWindow(run_aprom_btn_, connected && !busy_);
-    mfc_tool::ui::SafeEnableWindow(reset_target_btn_, connected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(program_btn_, !busy_ && image_loaded && !(operations_ && operations_->OutcomeUnknown()));
+    mfc_tool::ui::SafeEnableWindow(run_aprom_btn_, connected && !busy_ && !(operations_ && operations_->OutcomeUnknown()));
+    mfc_tool::ui::SafeEnableWindow(reset_target_btn_, connected && !busy_ && !(operations_ && operations_->OutcomeUnknown()));
     mfc_tool::ui::SafeEnableWindow(stop_btn_, busy_);
 }
 
@@ -345,10 +351,10 @@ CUsbHidIspTab::BootloaderConnectResult CUsbHidIspTab::ConnectBootloaderFlow() {
     std::string last_open_error;
     std::string last_connect_error;
 
-    auto cancel = [this]() -> bool { return cancel_requested_; };
+    auto cancel = [this]() -> bool { return CancellationRequested(); };
     auto poll = [this]() { PumpUiMessages(); };
     auto throw_if_cancelled = [this]() {
-        if (cancel_requested_) {
+        if (CancellationRequested()) {
             throw std::runtime_error("operation cancelled by user");
         }
     };
@@ -463,6 +469,11 @@ HBRUSH CUsbHidIspTab::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor) {
 void CUsbHidIspTab::PumpUiMessages() {
     MSG msg;
     while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE) != FALSE) {
+        if (msg.message == WM_QUIT) {
+            operations_->RequestClose();
+            ::PostQuitMessage(static_cast<int>(msg.wParam));
+            break;
+        }
         if (!AfxGetApp()->PreTranslateMessage(&msg)) {
             ::TranslateMessage(&msg);
             ::DispatchMessageW(&msg);
@@ -498,11 +509,15 @@ void CUsbHidIspTab::RefreshSharedImageState() {
 }
 
 void CUsbHidIspTab::OnRefreshHid() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     RefreshDevices();
     UpdateEnableState();
 }
 
 void CUsbHidIspTab::OnConnectHid() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         cancel_requested_ = false;
         busy_ = true;
@@ -534,6 +549,8 @@ void CUsbHidIspTab::OnConnectHid() {
 }
 
 void CUsbHidIspTab::OnDisconnectHid() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     client_.Disconnect();
     SetTargetReady(false, L"Target: not connected");
     AppendStatusText(L"USB HID closed.");
@@ -544,6 +561,8 @@ void CUsbHidIspTab::OnDisconnectHid() {
 }
 
 void CUsbHidIspTab::OnConnectTarget() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         cancel_requested_ = false;
         busy_ = true;
@@ -568,6 +587,8 @@ void CUsbHidIspTab::OnConnectTarget() {
 }
 
 void CUsbHidIspTab::OnGetDeviceId() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         cancel_requested_ = false;
         busy_ = true;
@@ -594,11 +615,14 @@ void CUsbHidIspTab::OnGetDeviceId() {
 }
 
 void CUsbHidIspTab::OnProgram() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
         if (!firmware_image_data_) {
             throw std::invalid_argument("load firmware image first");
         }
-        const std::vector<std::uint8_t>& image = firmware_image_data_();
+        const std::vector<std::uint8_t> image = firmware_image_data_();
+        (void)mfc_tool::core::CheckedImageLength(image.size(), mfc_tool::core::kMaxIspImageBytes);
         if (image.empty()) {
             throw std::invalid_argument("load firmware image first");
         }
@@ -614,7 +638,7 @@ void CUsbHidIspTab::OnProgram() {
             }
         } guard{this};
 
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
         (void)ConnectBootloaderFlow();
         SetTargetReady(true, L"Target Ready - programming APROM...");
@@ -639,6 +663,12 @@ void CUsbHidIspTab::OnProgram() {
         if (persist_settings_) {
             persist_settings_();
         }
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        SetTargetReady(false, L"Target: programming outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
+        SetProgress(progress_.GetPos(), L"Program: outcome unknown, confirmed " +
+            std::to_wstring(e.confirmed_bytes) + L" bytes - recover target before a new session");
     } catch (const std::exception& e) {
         SetTargetReady(false, IsCancelError(e) ? L"Target: program stopped" : L"Target: program failed");
         AppendStatusText(L"Program failed: " + AnsiToWide(e.what()));
@@ -649,22 +679,34 @@ void CUsbHidIspTab::OnProgram() {
 }
 
 void CUsbHidIspTab::OnRunAprom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
         EnsureHidConnected();
         client_.RunAprom();
         SetTargetReady(false, L"Target: Run APROM command sent");
         AppendStatusText(L"Run APROM command sent.");
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        SetTargetReady(false, L"Target: command outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
     } catch (const std::exception& e) {
         ::MessageBoxW(m_hWnd, AnsiToWide(e.what()).c_str(), L"Run APROM", MB_ICONERROR | MB_OK);
     }
 }
 
 void CUsbHidIspTab::OnResetTarget() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
         EnsureHidConnected();
         client_.ResetTarget();
         SetTargetReady(false, L"Target: Reset Target command sent");
         AppendStatusText(L"Reset Target command sent.");
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        SetTargetReady(false, L"Target: command outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
     } catch (const std::exception& e) {
         ::MessageBoxW(m_hWnd, AnsiToWide(e.what()).c_str(), L"Reset Target", MB_ICONERROR | MB_OK);
     }

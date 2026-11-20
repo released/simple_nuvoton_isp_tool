@@ -7,19 +7,21 @@
 #include <hidsdi.h>
 
 #include <algorithm>
+#include "aprom_programmer.h"
 #include <chrono>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
 
 #include "../hid/hid_scan.h"
+#include "../hid/overlapped_io.h"
 
 namespace mfc_tool::core {
 namespace {
 
-constexpr std::uint32_t CMD_UPDATE_APROM = 0x000000A0u;
 constexpr std::uint32_t CMD_READ_CONFIG = 0x000000A2u;
 constexpr std::uint32_t CMD_SYNC_PACKNO = 0x000000A4u;
 constexpr std::uint32_t CMD_GET_FWVER = 0x000000A6u;
@@ -27,7 +29,6 @@ constexpr std::uint32_t CMD_RUN_APROM = 0x000000ABu;
 constexpr std::uint32_t CMD_RESET = 0x000000ADu;
 constexpr std::uint32_t CMD_CONNECT = 0x000000AEu;
 constexpr std::uint32_t CMD_GET_DEVICEID = 0x000000B1u;
-constexpr std::uint32_t CMD_RESEND_PACKET = 0x000000FFu;
 constexpr std::uint16_t kNuvotonVid = 0x0416u;
 constexpr std::uint16_t kNuvotonUsbIspPid = 0x3F00u;
 constexpr std::uint16_t kNuvotonLegacyUsbIspPid = 0xA316u;
@@ -40,7 +41,8 @@ HANDLE AsHandle(void* h) {
     return reinterpret_cast<HANDLE>(h);
 }
 
-std::vector<std::uint8_t> IoReadWithTimeout(HANDLE handle, DWORD bytes_to_read, int timeout_ms) {
+std::vector<std::uint8_t> IoReadWithTimeout(HANDLE handle, DWORD bytes_to_read, int timeout_ms,
+    const std::function<bool()>& cancel, const std::function<void()>& poll) {
     std::vector<std::uint8_t> out(bytes_to_read, 0u);
 
     OVERLAPPED ov = {};
@@ -56,16 +58,11 @@ std::vector<std::uint8_t> IoReadWithTimeout(HANDLE handle, DWORD bytes_to_read, 
         throw std::runtime_error("HID ReadFile failed");
     }
 
-    DWORD wait = WaitForSingleObject(ov.hEvent, static_cast<DWORD>((std::max)(1, timeout_ms)));
-    if (wait != WAIT_OBJECT_0) {
-        CancelIoEx(handle, &ov);
+    try {
+        read_bytes = mfc_tool::hid::CompleteOverlappedIo(handle, ov, timeout_ms, cancel, poll);
+    } catch (...) {
         CloseHandle(ov.hEvent);
-        throw std::runtime_error(wait == WAIT_TIMEOUT ? "HID read timeout" : "HID read wait failed");
-    }
-
-    if (!GetOverlappedResult(handle, &ov, &read_bytes, FALSE)) {
-        CloseHandle(ov.hEvent);
-        throw std::runtime_error("GetOverlappedResult(HID read) failed");
+        throw;
     }
 
     CloseHandle(ov.hEvent);
@@ -73,7 +70,8 @@ std::vector<std::uint8_t> IoReadWithTimeout(HANDLE handle, DWORD bytes_to_read, 
     return out;
 }
 
-DWORD IoWriteWithTimeout(HANDLE handle, const std::vector<std::uint8_t>& data, int timeout_ms) {
+DWORD IoWriteWithTimeout(HANDLE handle, const std::vector<std::uint8_t>& data, int timeout_ms,
+    const std::function<bool()>& cancel = {}, const std::function<void()>& poll = {}) {
     OVERLAPPED ov = {};
     ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!ov.hEvent) {
@@ -87,16 +85,11 @@ DWORD IoWriteWithTimeout(HANDLE handle, const std::vector<std::uint8_t>& data, i
         throw std::runtime_error("HID WriteFile failed");
     }
 
-    DWORD wait = WaitForSingleObject(ov.hEvent, static_cast<DWORD>((std::max)(1, timeout_ms)));
-    if (wait != WAIT_OBJECT_0) {
-        CancelIoEx(handle, &ov);
+    try {
+        written = mfc_tool::hid::CompleteOverlappedIo(handle, ov, timeout_ms, cancel, poll);
+    } catch (...) {
         CloseHandle(ov.hEvent);
-        throw std::runtime_error(wait == WAIT_TIMEOUT ? "HID write timeout" : "HID write wait failed");
-    }
-
-    if (!GetOverlappedResult(handle, &ov, &written, FALSE)) {
-        CloseHandle(ov.hEvent);
-        throw std::runtime_error("GetOverlappedResult(HID write) failed");
+        throw;
     }
 
     CloseHandle(ov.hEvent);
@@ -305,76 +298,36 @@ void NuvoIspUsbHidClient::ProgramAprom(
     const std::function<void()>& on_poll
 ) {
     if (!IsConnected()) {
-        throw std::runtime_error("USB HID is not connected");
+        throw std::runtime_error("programming transport is not connected");
     }
-    if (image.empty()) {
-        throw std::invalid_argument("binary image is empty");
-    }
-    if (image.size() > 0x00100000u) {
-        throw std::invalid_argument("binary image is too large for the ISP packet flow");
-    }
-
-    const std::uint32_t total_len = static_cast<std::uint32_t>(image.size());
-    const std::uint32_t packet_address_field = 0u;
-    SyncPacketNumber(should_cancel, on_poll);
-
-    std::uint32_t offset = 0u;
-    std::uint32_t packet_count = 0u;
-    while (offset < total_len) {
-        ThrowIfCancelled(should_cancel);
-
-        std::vector<std::uint8_t> payload;
-        std::uint32_t command = 0u;
-        std::uint32_t write_len = total_len - offset;
-        int timeout_ms = options_.normal_response_timeout_ms;
-
-        if (offset == 0u) {
-            command = CMD_UPDATE_APROM;
-            write_len = (std::min)(write_len, static_cast<std::uint32_t>(kPayloadSize - 8u));
-            AppendLe32(&payload, packet_address_field);
-            AppendLe32(&payload, total_len);
-            payload.insert(payload.end(), image.begin(), image.begin() + write_len);
-            timeout_ms = options_.long_response_timeout_ms;
-        } else {
-            write_len = (std::min)(write_len, static_cast<std::uint32_t>(kPayloadSize));
-            payload.insert(payload.end(), image.begin() + offset, image.begin() + offset + write_len);
-        }
-
-        bool accepted = false;
-        for (int attempt = 0; attempt < options_.program_retry_count && !accepted; ++attempt) {
-            ThrowIfCancelled(should_cancel);
-            NuvoIspUsbHidResponse response = Transact(command, payload, true, timeout_ms, false, should_cancel, on_poll);
-            if (response.checksum_ok && response.index_ok) {
-                accepted = true;
-                break;
+    ProgramApromImage(image,
+        [&]() { SyncPacketNumber(should_cancel, on_poll); },
+        [&](std::uint32_t command, const std::vector<std::uint8_t>& payload, bool first) {
+            (void)Transact(command, payload, true,
+                first ? options_.long_response_timeout_ms : options_.normal_response_timeout_ms,
+                true, should_cancel, on_poll);
+        },
+        [&](const ApromProgress& p) {
+            if (on_progress) {
+                on_progress({p.bytes_done, p.total_bytes, p.packet_index});
             }
-            if (offset == 0u || attempt + 1 >= options_.program_retry_count) {
-                throw std::runtime_error(ResponseErrorText(response));
-            }
-            SendResendPacket(should_cancel, on_poll);
-        }
-
-        offset += write_len;
-        ++packet_count;
-        if (on_progress) {
-            NuvoIspUsbHidProgress progress;
-            progress.bytes_done = (std::min)(offset, static_cast<std::uint32_t>(image.size()));
-            progress.total_bytes = static_cast<std::uint32_t>(image.size());
-            progress.packet_index = packet_count;
-            on_progress(progress);
-        }
-        if (on_poll) {
-            on_poll();
-        }
-    }
+        }, should_cancel, on_poll);
 }
 
 void NuvoIspUsbHidClient::RunAprom() {
-    SendNoResponse(CMD_RUN_APROM);
+    try {
+        SendNoResponse(CMD_RUN_APROM);
+    } catch (const std::exception& e) {
+        throw ProgrammingOutcomeUnknown(0u, packet_index_, e.what());
+    }
 }
 
 void NuvoIspUsbHidClient::ResetTarget() {
-    SendNoResponse(CMD_RESET);
+    try {
+        SendNoResponse(CMD_RESET);
+    } catch (const std::exception& e) {
+        throw ProgrammingOutcomeUnknown(0u, packet_index_, e.what());
+    }
 }
 
 void NuvoIspUsbHidClient::OpenHandle(const std::wstring& path) {
@@ -435,12 +388,15 @@ NuvoIspUsbHidResponse NuvoIspUsbHidClient::Transact(
     ThrowIfCancelled(should_cancel);
     HANDLE h = AsHandle(handle_);
     const std::uint32_t sent_index = packet_index_;
+    if (sent_index > (std::numeric_limits<std::uint32_t>::max)() - 2u) {
+        throw std::overflow_error("ISP packet index exhausted; reconnect before another command");
+    }
     const std::vector<std::uint8_t> packet = BuildPacket(command, sent_index, payload);
     const std::uint16_t expected_checksum = Checksum(packet);
 
     const std::vector<std::uint8_t> report = BuildWriteReport(packet);
-    const DWORD written = IoWriteWithTimeout(h, report, timeout_ms_);
-    if (written == 0u) {
+    const DWORD written = IoWriteWithTimeout(h, report, timeout_ms_, should_cancel, on_poll);
+    if (written != report.size()) {
         throw std::runtime_error("failed to write USB HID report");
     }
     packet_index_ += 2u;
@@ -472,10 +428,13 @@ void NuvoIspUsbHidClient::SendNoResponse(std::uint32_t command) {
     }
 
     HANDLE h = AsHandle(handle_);
+    if (packet_index_ > (std::numeric_limits<std::uint32_t>::max)() - 2u) {
+        throw std::overflow_error("ISP packet index exhausted; reconnect before another command");
+    }
     const std::vector<std::uint8_t> packet = BuildPacket(command, packet_index_, {});
     const std::vector<std::uint8_t> report = BuildWriteReport(packet);
     const DWORD written = IoWriteWithTimeout(h, report, timeout_ms_);
-    if (written == 0u) {
+    if (written != report.size()) {
         throw std::runtime_error("failed to write USB HID report");
     }
     packet_index_ += 2u;
@@ -510,7 +469,7 @@ std::vector<std::uint8_t> NuvoIspUsbHidClient::ReadPacket(
         int remain_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout - (now - start)).count());
         remain_ms = (std::max)(50, remain_ms);
 
-        std::vector<std::uint8_t> read_buf = IoReadWithTimeout(h, bytes_to_read, remain_ms);
+        std::vector<std::uint8_t> read_buf = IoReadWithTimeout(h, bytes_to_read, remain_ms, should_cancel, on_poll);
         if (on_poll) {
             on_poll();
         }
@@ -565,10 +524,6 @@ std::vector<std::uint8_t> NuvoIspUsbHidClient::BuildWriteReport(const std::vecto
     return report;
 }
 
-void NuvoIspUsbHidClient::SendResendPacket(const std::function<bool()>& should_cancel,
-                                           const std::function<void()>& on_poll) {
-    (void)Transact(CMD_RESEND_PACKET, {}, false, options_.long_response_timeout_ms, true, should_cancel, on_poll);
-}
 
 std::vector<std::uint8_t> NuvoIspUsbHidClient::BuildPacket(
     std::uint32_t command,
@@ -601,7 +556,7 @@ std::uint16_t NuvoIspUsbHidClient::ReadLe16(const std::uint8_t* bytes) {
 }
 
 std::uint32_t NuvoIspUsbHidClient::ReadLe32(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
-    if (bytes.size() < offset + 4u) {
+    if (offset > bytes.size() || bytes.size() - offset < 4u) {
         throw std::runtime_error("short little-endian word");
     }
     return static_cast<std::uint32_t>(bytes[offset]) |

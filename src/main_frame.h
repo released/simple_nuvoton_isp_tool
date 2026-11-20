@@ -12,6 +12,7 @@
 #include "core/app_state.h"
 #include "core/bridge_service.h"
 #include "core/pin_usage_registry.h"
+#include "core/operation_session.h"
 #include "log/logger.h"
 #include "ui/fw_upload_tab.h"
 #include "ui/uart_isp_tab.h"
@@ -30,6 +31,7 @@ protected:
     afx_msg LRESULT OnDpiChanged(WPARAM wParam, LPARAM lParam);
     afx_msg void OnGetMinMaxInfo(MINMAXINFO* lpMMI);
     afx_msg void OnTabSelChange(NMHDR* pNMHDR, LRESULT* pResult);
+    afx_msg void OnTabSelChanging(NMHDR* header, LRESULT* result);
     afx_msg void OnBnClickedLoadImage();
     afx_msg void OnBnClickedSaveIni();
     afx_msg void OnBnClickedLoadIni();
@@ -53,6 +55,7 @@ private:
     void SetFirmwareImagePathText();
     bool LoadFirmwareImageFromPath(const std::wstring& path, bool show_errors);
     void RefreshSharedImageState();
+    void UpdateOperationUi();
     void LoadIni();
     void SaveIni();
     void SaveIniTo(const std::wstring& path);
@@ -83,6 +86,7 @@ private:
     CStatic build_info_value_;
 
     CTabCtrl tab_ctrl_;
+    mfc_tool::core::OperationSession operations_;
     CFwUploadTab fw_upload_tab_;
     CUartIspTab uart_isp_tab_;
     CXmodemTab xmodem_tab_;

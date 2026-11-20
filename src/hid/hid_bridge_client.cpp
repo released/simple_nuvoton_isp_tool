@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "hid_scan.h"
+#include "overlapped_io.h"
 #include "../core/bridge_commands.h"
 
 namespace mfc_tool::hid {
@@ -44,16 +45,11 @@ std::vector<std::uint8_t> IoReadWithTimeout(HANDLE handle, DWORD bytes_to_read, 
         throw BridgeException("ReadFile failed");
     }
 
-    DWORD wait = WaitForSingleObject(ov.hEvent, static_cast<DWORD>((std::max)(1, timeout_ms)));
-    if (wait != WAIT_OBJECT_0) {
-        CancelIoEx(handle, &ov);
+    try {
+        read_bytes = CompleteOverlappedIo(handle, ov, timeout_ms);
+    } catch (const std::exception& e) {
         CloseHandle(ov.hEvent);
-        throw BridgeException(wait == WAIT_TIMEOUT ? "Read timeout" : "Read wait failed");
-    }
-
-    if (!GetOverlappedResult(handle, &ov, &read_bytes, FALSE)) {
-        CloseHandle(ov.hEvent);
-        throw BridgeException("GetOverlappedResult(read) failed");
+        throw BridgeException(e.what());
     }
 
     CloseHandle(ov.hEvent);
@@ -75,16 +71,11 @@ DWORD IoWriteWithTimeout(HANDLE handle, const std::vector<std::uint8_t>& data, i
         throw BridgeException("WriteFile failed");
     }
 
-    DWORD wait = WaitForSingleObject(ov.hEvent, static_cast<DWORD>((std::max)(1, timeout_ms)));
-    if (wait != WAIT_OBJECT_0) {
-        CancelIoEx(handle, &ov);
+    try {
+        written = CompleteOverlappedIo(handle, ov, timeout_ms);
+    } catch (const std::exception& e) {
         CloseHandle(ov.hEvent);
-        throw BridgeException(wait == WAIT_TIMEOUT ? "Write timeout" : "Write wait failed");
-    }
-
-    if (!GetOverlappedResult(handle, &ov, &written, FALSE)) {
-        CloseHandle(ov.hEvent);
-        throw BridgeException("GetOverlappedResult(write) failed");
+        throw BridgeException(e.what());
     }
 
     CloseHandle(ov.hEvent);
@@ -356,7 +347,7 @@ std::vector<std::uint8_t> HidBridgeClient::Transact(std::uint8_t cmd, const std:
 
     std::vector<std::uint8_t> report = BuildWriteReport(frame);
     DWORD written = IoWriteWithTimeout(h, report, timeout_ms_);
-    if (written == 0) {
+    if (written != report.size()) {
         throw BridgeException("failed to write HID report");
     }
 

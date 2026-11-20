@@ -12,7 +12,18 @@
 
 namespace mfc_tool::vcom {
 
-class SerialPort {
+class SerialTransport {
+public:
+    virtual ~SerialTransport() = default;
+    virtual bool Open(const std::wstring&, std::uint32_t, std::wstring*) = 0;
+    virtual void Close() = 0;
+    virtual bool IsOpen() const = 0;
+    virtual bool WriteAll(const std::uint8_t*, std::size_t, std::uint32_t, std::wstring*) = 0;
+    virtual bool ReadSome(std::vector<std::uint8_t>*, std::size_t, std::uint32_t, std::wstring*) = 0;
+    virtual bool Purge(std::wstring*) = 0;
+};
+
+class SerialPort : public SerialTransport {
 public:
     SerialPort();
     ~SerialPort();

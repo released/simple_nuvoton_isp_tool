@@ -1,8 +1,10 @@
 #include "nuvo_isp_uart.h"
 
 #include <algorithm>
+#include "aprom_programmer.h"
 #include <chrono>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -10,14 +12,12 @@
 namespace mfc_tool::core {
 namespace {
 
-constexpr std::uint32_t CMD_UPDATE_APROM = 0x000000A0u;
 constexpr std::uint32_t CMD_SYNC_PACKNO = 0x000000A4u;
 constexpr std::uint32_t CMD_GET_FWVER = 0x000000A6u;
 constexpr std::uint32_t CMD_RUN_APROM = 0x000000ABu;
 constexpr std::uint32_t CMD_RESET = 0x000000ADu;
 constexpr std::uint32_t CMD_CONNECT = 0x000000AEu;
 constexpr std::uint32_t CMD_GET_DEVICEID = 0x000000B1u;
-constexpr std::uint32_t CMD_RESEND_PACKET = 0x000000FFu;
 constexpr std::size_t kPacketSize = 64u;
 constexpr std::size_t kHeaderSize = 8u;
 constexpr std::size_t kPayloadSize = kPacketSize - kHeaderSize;
@@ -31,7 +31,7 @@ void NuvoIspUartClient::Connect(const std::wstring& com_port, std::uint32_t baud
     }
 
     std::wstring error;
-    if (!port_.Open(com_port, baudrate, &error)) {
+    if (!port_->Open(com_port, baudrate, &error)) {
         throw std::runtime_error("open UART failed: " + WideToNarrow(error));
     }
 
@@ -42,13 +42,13 @@ void NuvoIspUartClient::Connect(const std::wstring& com_port, std::uint32_t baud
 }
 
 void NuvoIspUartClient::Disconnect() {
-    port_.Close();
+    port_->Close();
     current_port_.clear();
     packet_index_ = 18u;
 }
 
 bool NuvoIspUartClient::IsConnected() const noexcept {
-    return port_.IsOpen();
+    return port_->IsOpen();
 }
 
 void NuvoIspUartClient::SetOptions(const NuvoIspUartOptions& options) {
@@ -121,76 +121,36 @@ void NuvoIspUartClient::ProgramAprom(
     const std::function<void()>& on_poll
 ) {
     if (!IsConnected()) {
-        throw std::runtime_error("UART is not connected");
+        throw std::runtime_error("programming transport is not connected");
     }
-    if (image.empty()) {
-        throw std::invalid_argument("binary image is empty");
-    }
-    if (image.size() > 0x00100000u) {
-        throw std::invalid_argument("binary image is too large for the ISP packet flow");
-    }
-
-    const std::uint32_t total_len = static_cast<std::uint32_t>(image.size());
-    const std::uint32_t packet_address_field = 0u;
-    SyncPacketNumber(should_cancel, on_poll);
-
-    std::uint32_t offset = 0u;
-    std::uint32_t packet_count = 0u;
-    while (offset < total_len) {
-        ThrowIfCancelled(should_cancel);
-
-        std::vector<std::uint8_t> payload;
-        std::uint32_t command = 0u;
-        std::uint32_t write_len = total_len - offset;
-        int timeout_ms = options_.normal_response_timeout_ms;
-
-        if (offset == 0u) {
-            command = CMD_UPDATE_APROM;
-            write_len = (std::min)(write_len, static_cast<std::uint32_t>(kPayloadSize - 8u));
-            AppendLe32(&payload, packet_address_field);
-            AppendLe32(&payload, total_len);
-            payload.insert(payload.end(), image.begin(), image.begin() + write_len);
-            timeout_ms = options_.long_response_timeout_ms;
-        } else {
-            write_len = (std::min)(write_len, static_cast<std::uint32_t>(kPayloadSize));
-            payload.insert(payload.end(), image.begin() + offset, image.begin() + offset + write_len);
-        }
-
-        bool accepted = false;
-        for (int attempt = 0; attempt < options_.program_retry_count && !accepted; ++attempt) {
-            ThrowIfCancelled(should_cancel);
-            NuvoIspUartResponse response = Transact(command, payload, true, timeout_ms, false, should_cancel, on_poll);
-            if (response.checksum_ok && response.index_ok) {
-                accepted = true;
-                break;
+    ProgramApromImage(image,
+        [&]() { SyncPacketNumber(should_cancel, on_poll); },
+        [&](std::uint32_t command, const std::vector<std::uint8_t>& payload, bool first) {
+            (void)Transact(command, payload, true,
+                first ? options_.long_response_timeout_ms : options_.normal_response_timeout_ms,
+                true, should_cancel, on_poll);
+        },
+        [&](const ApromProgress& p) {
+            if (on_progress) {
+                on_progress({p.bytes_done, p.total_bytes, p.packet_index});
             }
-            if (offset == 0u || attempt + 1 >= options_.program_retry_count) {
-                throw std::runtime_error(ResponseErrorText(response));
-            }
-            SendResendPacket(should_cancel, on_poll);
-        }
-
-        offset += write_len;
-        ++packet_count;
-        if (on_progress) {
-            NuvoIspUartProgress progress;
-            progress.bytes_done = (std::min)(offset, static_cast<std::uint32_t>(image.size()));
-            progress.total_bytes = static_cast<std::uint32_t>(image.size());
-            progress.packet_index = packet_count;
-            on_progress(progress);
-        }
-        if (on_poll) {
-            on_poll();
-        }
-    }
+        }, should_cancel, on_poll);
 }
 
 void NuvoIspUartClient::RunAprom() {
-    SendNoResponse(CMD_RUN_APROM);
+    try {
+        SendNoResponse(CMD_RUN_APROM);
+    } catch (const std::exception& e) {
+        throw ProgrammingOutcomeUnknown(0u, packet_index_, e.what());
+    }
 }
 
 void NuvoIspUartClient::ResetTarget() {
-    SendNoResponse(CMD_RESET);
+    try {
+        SendNoResponse(CMD_RESET);
+    } catch (const std::exception& e) {
+        throw ProgrammingOutcomeUnknown(0u, packet_index_, e.what());
+    }
 }
 
 NuvoIspUartResponse NuvoIspUartClient::Transact(
@@ -211,11 +171,14 @@ NuvoIspUartResponse NuvoIspUartClient::Transact(
 
     ThrowIfCancelled(should_cancel);
     const std::uint32_t sent_index = packet_index_;
+    if (sent_index > (std::numeric_limits<std::uint32_t>::max)() - 2u) {
+        throw std::overflow_error("ISP packet index exhausted; reconnect before another command");
+    }
     const std::vector<std::uint8_t> packet = BuildPacket(command, sent_index, payload);
     const std::uint16_t expected_checksum = Checksum(packet);
 
     std::wstring error;
-    if (!port_.WriteAll(packet.data(), packet.size(), static_cast<std::uint32_t>(timeout_ms_), &error)) {
+    if (!port_->WriteAll(packet.data(), packet.size(), static_cast<std::uint32_t>(timeout_ms_), &error)) {
         throw std::runtime_error("UART write failed: " + WideToNarrow(error));
     }
     packet_index_ += 2u;
@@ -239,9 +202,12 @@ void NuvoIspUartClient::SendNoResponse(std::uint32_t command) {
     if (!IsConnected()) {
         throw std::runtime_error("UART is not connected");
     }
+    if (packet_index_ > (std::numeric_limits<std::uint32_t>::max)() - 2u) {
+        throw std::overflow_error("ISP packet index exhausted; reconnect before another command");
+    }
     const std::vector<std::uint8_t> packet = BuildPacket(command, packet_index_, {});
     std::wstring error;
-    if (!port_.WriteAll(packet.data(), packet.size(), static_cast<std::uint32_t>(timeout_ms_), &error)) {
+    if (!port_->WriteAll(packet.data(), packet.size(), static_cast<std::uint32_t>(timeout_ms_), &error)) {
         throw std::runtime_error("UART write failed: " + WideToNarrow(error));
     }
     packet_index_ += 2u;
@@ -269,7 +235,7 @@ std::vector<std::uint8_t> NuvoIspUartClient::ReadExact(
         std::vector<std::uint8_t> chunk;
         std::wstring error;
         const std::size_t want = (std::min)(length - out.size(), static_cast<std::size_t>(64u));
-        if (port_.ReadSome(&chunk, want, static_cast<std::uint32_t>(options_.response_poll_ms), &error)) {
+        if (port_->ReadSome(&chunk, want, static_cast<std::uint32_t>(options_.response_poll_ms), &error)) {
             out.insert(out.end(), chunk.begin(), chunk.end());
         } else if (error != L"Read timeout.") {
             throw std::runtime_error("UART read failed: " + WideToNarrow(error));
@@ -283,10 +249,6 @@ std::vector<std::uint8_t> NuvoIspUartClient::ReadExact(
     return out;
 }
 
-void NuvoIspUartClient::SendResendPacket(const std::function<bool()>& should_cancel,
-                                         const std::function<void()>& on_poll) {
-    (void)Transact(CMD_RESEND_PACKET, {}, false, options_.long_response_timeout_ms, true, should_cancel, on_poll);
-}
 
 std::vector<std::uint8_t> NuvoIspUartClient::BuildPacket(
     std::uint32_t command,
@@ -315,7 +277,7 @@ std::uint16_t NuvoIspUartClient::Checksum(const std::vector<std::uint8_t>& bytes
 }
 
 std::uint32_t NuvoIspUartClient::ReadLe32(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
-    if (bytes.size() < offset + 4u) {
+    if (offset > bytes.size() || bytes.size() - offset < 4u) {
         throw std::runtime_error("short little-endian word");
     }
     return static_cast<std::uint32_t>(bytes[offset]) |

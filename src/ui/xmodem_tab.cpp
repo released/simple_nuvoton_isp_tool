@@ -10,6 +10,8 @@
 #include <utility>
 
 #include "../core/text_utils.h"
+#include "../core/aprom_programmer.h"
+#include "../core/firmware_image.h"
 #include "layout_utils.h"
 
 namespace {
@@ -41,6 +43,7 @@ enum : UINT {
 };
 
 bool IsCancelError(const std::exception& e) {
+    if (dynamic_cast<const mfc_tool::core::ProgrammingOutcomeUnknown*>(&e) != nullptr) return false;
     return std::string(e.what()).find("cancelled") != std::string::npos ||
         std::string(e.what()).find("canceled") != std::string::npos ||
         std::string(e.what()).find("cancelled") != std::string::npos;
@@ -237,6 +240,9 @@ void CXmodemTab::PopulateBaudCombo() {
 }
 
 void CXmodemTab::UpdateEnableState() {
+    if (operations_ && operations_->OutcomeUnknown() && ::IsWindow(transfer_state_label_.GetSafeHwnd())) {
+        transfer_state_label_.SetWindowTextW(L"Session: programming outcome unknown - no replay");
+    }
     if (!::IsWindow(open_com_btn_.GetSafeHwnd())) {
         return;
     }
@@ -249,7 +255,7 @@ void CXmodemTab::UpdateEnableState() {
     mfc_tool::ui::SafeEnableWindow(refresh_com_btn_, !connected && !busy_);
     mfc_tool::ui::SafeEnableWindow(open_com_btn_, !connected && !busy_);
     mfc_tool::ui::SafeEnableWindow(close_com_btn_, connected && !busy_);
-    mfc_tool::ui::SafeEnableWindow(send_xmodem_btn_, connected && !busy_ && image_loaded);
+    mfc_tool::ui::SafeEnableWindow(send_xmodem_btn_, connected && !busy_ && image_loaded && !(operations_ && operations_->OutcomeUnknown()));
     mfc_tool::ui::SafeEnableWindow(cancel_btn_, busy_);
 }
 
@@ -283,14 +289,7 @@ void CXmodemTab::LoadImageFromPath(const std::wstring& path) {
     if (path.empty()) {
         throw std::invalid_argument("select a binary image first");
     }
-    std::ifstream in(std::filesystem::path(path), std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("failed to open binary image");
-    }
-    image_data_.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    if (image_data_.empty()) {
-        throw std::runtime_error("binary image is empty");
-    }
+    image_data_ = mfc_tool::core::ReadFirmwareImage(std::filesystem::path(path));
     state_.image_path = path;
     SetImagePathText();
     SetProgress(0, L"Progress: 0%");
@@ -338,6 +337,11 @@ void CXmodemTab::SetProgress(int value, const std::wstring& text) {
 void CXmodemTab::PumpUiMessages() {
     MSG msg;
     while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE) != FALSE) {
+        if (msg.message == WM_QUIT) {
+            operations_->RequestClose();
+            ::PostQuitMessage(static_cast<int>(msg.wParam));
+            break;
+        }
         if (!AfxGetApp()->PreTranslateMessage(&msg)) {
             ::TranslateMessage(&msg);
             ::DispatchMessageW(&msg);
@@ -361,7 +365,6 @@ void CXmodemTab::SaveState(mfc_tool::core::AppState* state) const {
 
 void CXmodemTab::OnShutdown() {
     cancel_requested_ = true;
-    sender_.CancelTransfer();
     sender_.Disconnect();
     busy_ = false;
     UpdateEnableState();
@@ -372,11 +375,15 @@ void CXmodemTab::RefreshSharedImageState() {
 }
 
 void CXmodemTab::OnRefreshCom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     RefreshComPorts();
     UpdateEnableState();
 }
 
 void CXmodemTab::OnOpenCom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         sender_.Connect(SelectedComPort(), SelectedBaudrate());
         AppendStatusText(L"XMODEM UART opened: " + SelectedComPort() + L", baud=" + std::to_wstring(SelectedBaudrate()));
@@ -393,6 +400,8 @@ void CXmodemTab::OnOpenCom() {
 }
 
 void CXmodemTab::OnCloseCom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     sender_.Disconnect();
     AppendStatusText(L"XMODEM UART closed.");
     if (log_) {
@@ -402,6 +411,8 @@ void CXmodemTab::OnCloseCom() {
 }
 
 void CXmodemTab::OnLoadImage() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     CFileDialog dlg(TRUE, L"bin", nullptr, OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
                     L"Binary Files (*.bin)|*.bin|All Files (*.*)|*.*||", this);
     if (dlg.DoModal() != IDOK) {
@@ -419,12 +430,14 @@ void CXmodemTab::OnLoadImage() {
 }
 
 void CXmodemTab::OnSendXmodem() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
         EnsureConnected();
         if (!firmware_image_data_) {
             throw std::invalid_argument("load firmware image first");
         }
-        const std::vector<std::uint8_t>& image = firmware_image_data_();
+        const std::vector<std::uint8_t> image = firmware_image_data_();
         if (image.empty()) {
             throw std::invalid_argument("load firmware image first");
         }
@@ -449,7 +462,7 @@ void CXmodemTab::OnSendXmodem() {
         SetProgress(0, L"Progress: 0%");
         AppendStatusText(L"XMODEM send start. Image size=" + std::to_wstring(image.size()) + L" bytes");
 
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
         sender_.Send(
             image,
@@ -470,6 +483,12 @@ void CXmodemTab::OnSendXmodem() {
         if (persist_settings_) {
             persist_settings_();
         }
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        transfer_state_label_.SetWindowTextW(L"Transfer: outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
+        SetProgress(progress_.GetPos(), L"Transfer: outcome unknown, confirmed " +
+            std::to_wstring(e.confirmed_bytes) + L" bytes - recover target before a new session");
     } catch (const std::exception& e) {
         transfer_state_label_.SetWindowTextW(IsCancelError(e) ? L"Transfer: stopped" : L"Transfer: failed");
         AppendStatusText(L"XMODEM failed: " + AnsiToWide(e.what()));
@@ -482,7 +501,7 @@ void CXmodemTab::OnSendXmodem() {
 void CXmodemTab::OnCancel() {
     if (busy_) {
         cancel_requested_ = true;
-        sender_.CancelTransfer();
+        operations_->RequestCancel();
         transfer_state_label_.SetWindowTextW(L"Transfer: cancel requested");
         AppendStatusText(L"XMODEM cancel requested.");
         UpdateEnableState();

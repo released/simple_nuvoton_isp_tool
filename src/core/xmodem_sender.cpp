@@ -1,6 +1,9 @@
 #include "xmodem_sender.h"
 
 #include <algorithm>
+#include <limits>
+#include "aprom_programmer.h"
+#include "firmware_image.h"
 #include <chrono>
 #include <cstring>
 #include <stdexcept>
@@ -47,7 +50,7 @@ void XmodemSender::Connect(const std::wstring& com_port, std::uint32_t baudrate)
     }
 
     std::wstring error;
-    if (!port_.Open(com_port, baudrate, &error)) {
+    if (!port_->Open(com_port, baudrate, &error)) {
         throw std::runtime_error("open XMODEM UART failed: " + WideToNarrow(error));
     }
     current_port_ = com_port;
@@ -55,12 +58,12 @@ void XmodemSender::Connect(const std::wstring& com_port, std::uint32_t baudrate)
 }
 
 void XmodemSender::Disconnect() {
-    port_.Close();
+    port_->Close();
     current_port_.clear();
 }
 
 bool XmodemSender::IsConnected() const noexcept {
-    return port_.IsOpen();
+    return port_->IsOpen();
 }
 
 void XmodemSender::SetOptions(const XmodemOptions& options) {
@@ -89,12 +92,10 @@ void XmodemSender::Send(
     if (!IsConnected()) {
         throw std::runtime_error("XMODEM UART is not connected");
     }
-    if (image.empty()) {
-        throw std::invalid_argument("binary image is empty");
-    }
+    const auto total_bytes = CheckedImageLength(image.size(), (std::numeric_limits<std::uint32_t>::max)());
 
     std::wstring purge_error;
-    if (!port_.Purge(&purge_error)) {
+    if (!port_->Purge(&purge_error)) {
         throw std::runtime_error("XMODEM UART purge failed: " + WideToNarrow(purge_error));
     }
 
@@ -106,7 +107,7 @@ void XmodemSender::Send(
 
     if (on_progress) {
         XmodemProgress p;
-        p.total_bytes = static_cast<std::uint32_t>(image.size());
+        p.total_bytes = total_bytes;
         p.crc_mode = crc_mode;
         on_progress(p);
     }
@@ -141,9 +142,18 @@ void XmodemSender::Send(
         int nak_count = 0;
         int timeout_count = 0;
         for (int retry = 0; retry < options_.max_retries && !acked; ++retry) {
+            if (retry > 0 && last_rsp != XMD_NAK && should_cancel && should_cancel()) {
+                throw ProgrammingOutcomeUnknown(static_cast<std::uint32_t>(offset), block_index + 1u,
+                    "cancelled while the block acknowledgement was unresolved");
+            }
             ThrowIfCancelled(should_cancel);
-            WriteAll(packet);
-            const int rsp = ReadByte(options_.response_timeout_ms, should_cancel, on_poll);
+            int rsp = -1;
+            try {
+                WriteAll(packet);
+                rsp = ReadByte(options_.response_timeout_ms, should_cancel, on_poll);
+            } catch (const std::exception& e) {
+                throw ProgrammingOutcomeUnknown(static_cast<std::uint32_t>(offset), block_index + 1u, e.what());
+            }
             last_rsp = rsp;
             if (rsp == XMD_ACK) {
                 acked = true;
@@ -155,7 +165,12 @@ void XmodemSender::Send(
                 ++timeout_count;
             }
             if (rsp == XMD_CAN) {
-                const int rsp2 = ReadByte(1000, should_cancel, on_poll);
+                int rsp2 = -1;
+                try {
+                    rsp2 = ReadByte(1000, should_cancel, on_poll);
+                } catch (const std::exception& e) {
+                    throw ProgrammingOutcomeUnknown(static_cast<std::uint32_t>(offset), block_index + 1u, e.what());
+                }
                 if (rsp2 == XMD_CAN) {
                     WriteByte(XMD_ACK);
                     throw std::runtime_error("XMODEM transfer cancelled by target");
@@ -164,8 +179,8 @@ void XmodemSender::Send(
         }
 
         if (!acked) {
-            CancelTransfer();
-            throw std::runtime_error(
+            // Same-number retransmission is XMODEM's duplicate-block contract, not a new update.
+            throw ProgrammingOutcomeUnknown(static_cast<std::uint32_t>(offset), block_index + 1u,
                 "XMODEM block was not acknowledged; block=" +
                 std::to_string(block_index + 1u) +
                 ", last response=" + ResponseName(last_rsp) +
@@ -179,7 +194,7 @@ void XmodemSender::Send(
         if (on_progress) {
             XmodemProgress p;
             p.bytes_done = static_cast<std::uint32_t>((std::min)(offset, image.size()));
-            p.total_bytes = static_cast<std::uint32_t>(image.size());
+            p.total_bytes = total_bytes;
             p.block_index = block_index;
             p.crc_mode = crc_mode;
             on_progress(p);
@@ -190,15 +205,24 @@ void XmodemSender::Send(
     }
 
     for (int retry = 0; retry < options_.max_retries; ++retry) {
+        if (retry > 0 && should_cancel && should_cancel()) {
+            throw ProgrammingOutcomeUnknown(total_bytes, block_index + 1u,
+                "cancelled while the EOT acknowledgement was unresolved");
+        }
         ThrowIfCancelled(should_cancel);
-        WriteByte(XMD_EOT);
-        const int rsp = ReadByte(options_.response_timeout_ms, should_cancel, on_poll);
+        int rsp = -1;
+        try {
+            WriteByte(XMD_EOT);
+            rsp = ReadByte(options_.response_timeout_ms, should_cancel, on_poll);
+        } catch (const std::exception& e) {
+            throw ProgrammingOutcomeUnknown(total_bytes, block_index + 1u, e.what());
+        }
         if (rsp == XMD_ACK) {
             return;
         }
     }
 
-    throw std::runtime_error("XMODEM EOT was not acknowledged");
+    throw ProgrammingOutcomeUnknown(total_bytes, block_index + 1u, "XMODEM EOT was not acknowledged");
 }
 
 int XmodemSender::ReadByte(int timeout_ms,
@@ -210,7 +234,7 @@ int XmodemSender::ReadByte(int timeout_ms,
         ThrowIfCancelled(should_cancel);
         std::vector<std::uint8_t> chunk;
         std::wstring error;
-        if (port_.ReadSome(&chunk, 1u, static_cast<std::uint32_t>(options_.byte_timeout_ms), &error)) {
+        if (port_->ReadSome(&chunk, 1u, static_cast<std::uint32_t>(options_.byte_timeout_ms), &error)) {
             if (!chunk.empty()) {
                 return chunk.front();
             }
@@ -233,7 +257,7 @@ void XmodemSender::WriteByte(std::uint8_t byte) {
 
 void XmodemSender::WriteAll(const std::vector<std::uint8_t>& bytes) {
     std::wstring error;
-    if (!port_.WriteAll(bytes.data(), bytes.size(), static_cast<std::uint32_t>(options_.response_timeout_ms), &error)) {
+    if (!port_->WriteAll(bytes.data(), bytes.size(), static_cast<std::uint32_t>(options_.response_timeout_ms), &error)) {
         throw std::runtime_error("XMODEM UART write failed: " + WideToNarrow(error));
     }
 }

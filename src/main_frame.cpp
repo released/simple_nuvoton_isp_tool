@@ -17,6 +17,7 @@
 
 #include "build_info.generated.h"
 #include "core/text_utils.h"
+#include "core/firmware_image.h"
 #include "resource.h"
 #include "ui/layout_utils.h"
 
@@ -43,6 +44,7 @@ BEGIN_MESSAGE_MAP(CMainFrame, CFrameWnd)
     ON_MESSAGE(WM_DPICHANGED, &CMainFrame::OnDpiChanged)
     ON_WM_GETMINMAXINFO()
     ON_NOTIFY(TCN_SELCHANGE, ID_TAB_CTRL, &CMainFrame::OnTabSelChange)
+    ON_NOTIFY(TCN_SELCHANGING, ID_TAB_CTRL, &CMainFrame::OnTabSelChanging)
     ON_BN_CLICKED(ID_TOP_LOAD_IMAGE_BTN, &CMainFrame::OnBnClickedLoadImage)
     ON_BN_CLICKED(ID_TOP_SAVE_INI_BTN, &CMainFrame::OnBnClickedSaveIni)
     ON_BN_CLICKED(ID_TOP_LOAD_INI_BTN, &CMainFrame::OnBnClickedLoadIni)
@@ -120,6 +122,11 @@ int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct) {
     auto tab_log = [this](const std::wstring& msg) { AppendLog(msg); };
     auto firmware_image_data = [this]() -> const std::vector<std::uint8_t>& { return firmware_image_data_; };
     auto firmware_image_path = [this]() -> std::wstring { return state_.ui.firmware_image_path; };
+    operations_.SetOnChange([this]() { UpdateOperationUi(); });
+    fw_upload_tab_.SetOperationSession(&operations_);
+    uart_isp_tab_.SetOperationSession(&operations_);
+    xmodem_tab_.SetOperationSession(&operations_);
+    usb_hid_isp_tab_.SetOperationSession(&operations_);
     fw_upload_tab_.Bind(&service_, tab_log, &pin_usage_, firmware_image_data, firmware_image_path, [this]() { SaveIni(); });
     uart_isp_tab_.Bind(tab_log, firmware_image_data, firmware_image_path, [this]() { SaveIni(); });
     xmodem_tab_.Bind(tab_log, firmware_image_data, firmware_image_path, [this]() { SaveIni(); });
@@ -392,15 +399,7 @@ bool CMainFrame::LoadFirmwareImageFromPath(const std::wstring& path, bool show_e
     }
 
     try {
-        std::ifstream in(std::filesystem::path(path), std::ios::binary);
-        if (!in) {
-            throw std::runtime_error("failed to open binary image");
-        }
-        std::vector<std::uint8_t> image;
-        image.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-        if (image.empty()) {
-            throw std::runtime_error("binary image is empty");
-        }
+        auto image = mfc_tool::core::ReadFirmwareImage(std::filesystem::path(path));
 
         firmware_image_data_ = std::move(image);
         state_.ui.firmware_image_path = path;
@@ -544,6 +543,7 @@ std::wstring CMainFrame::AnsiToWide(const char* text) {
 }
 
 void CMainFrame::OnBnClickedLoadImage() {
+    if (operations_.Active() || operations_.Closing()) return;
     CFileDialog dlg(TRUE, L"bin", nullptr,
                     OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
                     L"Binary Files (*.bin)|*.bin|All Files (*.*)|*.*||", this);
@@ -556,6 +556,7 @@ void CMainFrame::OnBnClickedLoadImage() {
 }
 
 void CMainFrame::OnBnClickedSaveIni() {
+    if (operations_.Active() || operations_.Closing()) return;
     CFileDialog dlg(FALSE, L"ini", L"simple_programming_tool.ini",
                     OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY,
                     L"INI Files (*.ini)|*.ini|All Files (*.*)|*.*||", this);
@@ -565,6 +566,7 @@ void CMainFrame::OnBnClickedSaveIni() {
 }
 
 void CMainFrame::OnBnClickedLoadIni() {
+    if (operations_.Active() || operations_.Closing()) return;
     if (service_.IsConnected()) {
         ShowErrorBox(L"Load INI", L"Disconnect first before loading INI settings.");
         AppendLog(L"Load INI blocked while connected.");
@@ -580,6 +582,7 @@ void CMainFrame::OnBnClickedLoadIni() {
 }
 
 void CMainFrame::OnBnClickedResetIni() {
+    if (operations_.Active() || operations_.Closing()) return;
     if (service_.IsConnected()) {
         ShowErrorBox(L"Reset INI", L"Disconnect first before resetting INI settings.");
         AppendLog(L"Reset INI blocked while connected.");
@@ -616,7 +619,28 @@ void CMainFrame::OnBnClickedClearLog() {
     log_edit_.SetWindowTextW(L"");
 }
 
+void CMainFrame::OnTabSelChanging(NMHDR*, LRESULT* result) {
+    *result = operations_.Active() || operations_.Closing() ? TRUE : FALSE;
+}
+
+void CMainFrame::UpdateOperationUi() {
+    const bool idle = !operations_.Active() && !operations_.Closing();
+    mfc_tool::ui::SafeEnableWindow(load_image_btn_, idle);
+    mfc_tool::ui::SafeEnableWindow(save_ini_btn_, idle);
+    mfc_tool::ui::SafeEnableWindow(load_ini_btn_, idle);
+    mfc_tool::ui::SafeEnableWindow(reset_ini_btn_, idle);
+    RefreshSharedImageState();
+    if (operations_.Closing() && !operations_.Active()) {
+        PostMessageW(WM_CLOSE);
+    }
+}
+
 void CMainFrame::OnClose() {
+    if (operations_.Active()) {
+        operations_.RequestClose();
+        AppendLog(L"Closing: cancellation requested; waiting for the current operation to return.");
+        return;
+    }
     SaveIni();
     fw_upload_tab_.OnDisconnected();
     uart_isp_tab_.OnShutdown();

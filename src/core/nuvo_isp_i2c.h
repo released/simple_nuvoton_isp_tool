@@ -16,7 +16,7 @@ struct NuvoIspI2cOptions {
     int response_poll_ms = 2;
     int normal_response_timeout_ms = 5000;
     int long_response_timeout_ms = 25000;
-    int program_retry_count = 10;
+    int program_retry_count = 10; // Source compatibility only; APROM data is never replayed.
 };
 
 struct NuvoIspI2cResponse {
@@ -72,8 +72,6 @@ private:
                                     int response_timeout_ms,
                                     const std::function<bool()>& should_cancel,
                                     const std::function<void()>& on_poll);
-    void SendResendPacket(const std::function<bool()>& should_cancel,
-                          const std::function<void()>& on_poll);
 
     static std::vector<std::uint8_t> BuildPacket(std::uint32_t command,
                                                  std::uint32_t packet_index,

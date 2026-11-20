@@ -14,6 +14,8 @@
 
 #include "../core/nuvo_isp_i2c.h"
 #include "../core/text_utils.h"
+#include "../core/aprom_programmer.h"
+#include "../core/firmware_image.h"
 #include "layout_utils.h"
 
 namespace {
@@ -83,6 +85,7 @@ enum : UINT {
 constexpr const wchar_t* kFwUploadOwner = L"FW-UPLOAD-M";
 
 bool IsCancelError(const std::exception& e) {
+    if (dynamic_cast<const mfc_tool::core::ProgrammingOutcomeUnknown*>(&e) != nullptr) return false;
     return std::string(e.what()).find("cancelled") != std::string::npos ||
         std::string(e.what()).find("canceled") != std::string::npos;
 }
@@ -574,34 +577,34 @@ void CFwUploadTab::SetBridgeConnectionUi() {
 
     connected_ = connected;
 
-    mfc_tool::ui::SafeEnableWindow(hid_group_, hid_selected);
-    mfc_tool::ui::SafeEnableWindow(vcom_group_, !hid_selected);
-    mfc_tool::ui::SafeEnableWindow(hid_check_, !connected);
-    mfc_tool::ui::SafeEnableWindow(vcom_check_, !connected);
+    mfc_tool::ui::SafeEnableWindow(hid_group_, hid_selected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(vcom_group_, !hid_selected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(hid_check_, !connected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(vcom_check_, !connected && !busy_);
 
-    mfc_tool::ui::SafeEnableWindow(vid_label_, hid_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(vid_edit_, hid_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(pid_label_, hid_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(pid_edit_, hid_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(timeout_label_, hid_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(timeout_edit_, hid_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(refresh_btn_, hid_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(connect_btn_, hid_selected && !connected);
-    mfc_tool::ui::SafeEnableWindow(disconnect_btn_, hid_connected);
-    mfc_tool::ui::SafeEnableWindow(device_label_, hid_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(device_combo_, hid_setup_enabled);
+    mfc_tool::ui::SafeEnableWindow(vid_label_, hid_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(vid_edit_, hid_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(pid_label_, hid_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(pid_edit_, hid_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(timeout_label_, hid_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(timeout_edit_, hid_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(refresh_btn_, hid_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(connect_btn_, hid_selected && !connected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(disconnect_btn_, hid_connected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(device_label_, hid_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(device_combo_, hid_setup_enabled && !busy_);
 
-    mfc_tool::ui::SafeEnableWindow(vcom_label_, vcom_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(vcom_combo_, vcom_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(vcom_baud_label_, vcom_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(vcom_baud_combo_, vcom_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(refresh_vcom_btn_, vcom_setup_enabled);
-    mfc_tool::ui::SafeEnableWindow(connect_vcom_btn_, !hid_selected && !connected);
-    mfc_tool::ui::SafeEnableWindow(disconnect_vcom_btn_, vcom_connected);
+    mfc_tool::ui::SafeEnableWindow(vcom_label_, vcom_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(vcom_combo_, vcom_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(vcom_baud_label_, vcom_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(vcom_baud_combo_, vcom_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(refresh_vcom_btn_, vcom_setup_enabled && !busy_);
+    mfc_tool::ui::SafeEnableWindow(connect_vcom_btn_, !hid_selected && !connected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(disconnect_vcom_btn_, vcom_connected && !busy_);
 
-    mfc_tool::ui::SafeEnableWindow(reset_mcu_btn_, connected);
-    mfc_tool::ui::SafeEnableWindow(get_info_btn_, connected);
-    mfc_tool::ui::SafeEnableWindow(ping_btn_, connected);
+    mfc_tool::ui::SafeEnableWindow(reset_mcu_btn_, connected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(get_info_btn_, connected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(ping_btn_, connected && !busy_);
 
     const std::wstring status = connected && service_ != nullptr
         ? (service_->ActiveTransportLabel() + L" Connected")
@@ -838,6 +841,9 @@ void CFwUploadTab::PopulatePinCombo(const std::wstring& preferred_ini_name) {
 }
 
 void CFwUploadTab::UpdateEnableState() {
+    if (operations_ && operations_->OutcomeUnknown()) {
+        SetTargetReady(false, L"Session: programming outcome unknown - no replay");
+    }
     if (!::IsWindow(enable_host_btn_.GetSafeHwnd())) {
         return;
     }
@@ -858,10 +864,11 @@ void CFwUploadTab::UpdateEnableState() {
 
     mfc_tool::ui::SafeEnableWindow(connect_target_btn_, ready && !busy_);
     mfc_tool::ui::SafeEnableWindow(get_device_btn_, ready && !busy_);
-    mfc_tool::ui::SafeEnableWindow(program_btn_, ready && !busy_ && image_loaded);
-    mfc_tool::ui::SafeEnableWindow(run_aprom_btn_, ready && !busy_);
-    mfc_tool::ui::SafeEnableWindow(reset_target_btn_, ready && !busy_);
+    mfc_tool::ui::SafeEnableWindow(program_btn_, ready && !busy_ && image_loaded && !(operations_ && operations_->OutcomeUnknown()));
+    mfc_tool::ui::SafeEnableWindow(run_aprom_btn_, ready && !busy_ && !(operations_ && operations_->OutcomeUnknown()));
+    mfc_tool::ui::SafeEnableWindow(reset_target_btn_, ready && !busy_ && !(operations_ && operations_->OutcomeUnknown()));
     mfc_tool::ui::SafeEnableWindow(stop_btn_, busy_);
+    SetBridgeConnectionUi();
 }
 
 void CFwUploadTab::RefreshPinUsage() {
@@ -906,6 +913,7 @@ void CFwUploadTab::EnsureHostEnabled() {
     if (service_ == nullptr || !connected_) {
         throw std::runtime_error("I2C bridge is not connected.");
     }
+    (void)CurrentAddress();
     SaveVisibleToState();
     if (host_enabled_) {
         return;
@@ -937,14 +945,7 @@ void CFwUploadTab::LoadImageFromPath(const std::wstring& path) {
     if (path.empty()) {
         throw std::invalid_argument("select a binary image first");
     }
-    std::ifstream in(std::filesystem::path(path), std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("failed to open binary image");
-    }
-    image_data_.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    if (image_data_.empty()) {
-        throw std::runtime_error("binary image is empty");
-    }
+    image_data_ = mfc_tool::core::ReadFirmwareImage(std::filesystem::path(path));
     state_.image_path = path;
     SetImagePathText();
     SetProgress(0, L"Progress: 0%");
@@ -1023,6 +1024,11 @@ HBRUSH CFwUploadTab::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor) {
 void CFwUploadTab::PumpUiMessages() {
     MSG msg;
     while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE) != FALSE) {
+        if (msg.message == WM_QUIT) {
+            operations_->RequestClose();
+            ::PostQuitMessage(static_cast<int>(msg.wParam));
+            break;
+        }
         if (!AfxGetApp()->PreTranslateMessage(&msg)) {
             ::TranslateMessage(&msg);
             ::DispatchMessageW(&msg);
@@ -1031,10 +1037,14 @@ void CFwUploadTab::PumpUiMessages() {
 }
 
 void CFwUploadTab::OnBridgeRefreshHid() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     RefreshDevices();
 }
 
 void CFwUploadTab::OnBridgeConnectHid() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         if (service_ == nullptr) {
             throw std::runtime_error("I2C bridge service is not available.");
@@ -1074,6 +1084,8 @@ void CFwUploadTab::OnBridgeConnectHid() {
 }
 
 void CFwUploadTab::OnBridgeDisconnectHid() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     if (service_ != nullptr) {
         service_->Disconnect();
     }
@@ -1084,6 +1096,8 @@ void CFwUploadTab::OnBridgeDisconnectHid() {
 }
 
 void CFwUploadTab::OnBridgeGetInfo() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         if (service_ == nullptr) {
             throw std::runtime_error("I2C bridge service is not available.");
@@ -1096,6 +1110,8 @@ void CFwUploadTab::OnBridgeGetInfo() {
 }
 
 void CFwUploadTab::OnBridgePing() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         if (service_ == nullptr) {
             throw std::runtime_error("I2C bridge service is not available.");
@@ -1111,6 +1127,8 @@ void CFwUploadTab::OnBridgePing() {
 }
 
 void CFwUploadTab::OnBridgeResetMcu() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         if (service_ == nullptr) {
             throw std::runtime_error("I2C bridge service is not available.");
@@ -1129,10 +1147,14 @@ void CFwUploadTab::OnBridgeResetMcu() {
 }
 
 void CFwUploadTab::OnBridgeRefreshVcom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     RefreshVcomPorts();
 }
 
 void CFwUploadTab::OnBridgeConnectVcom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         if (service_ == nullptr) {
             throw std::runtime_error("I2C bridge service is not available.");
@@ -1167,6 +1189,8 @@ void CFwUploadTab::OnBridgeConnectVcom() {
 }
 
 void CFwUploadTab::OnBridgeDisconnectVcom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     if (service_ != nullptr) {
         service_->Disconnect();
     }
@@ -1177,6 +1201,8 @@ void CFwUploadTab::OnBridgeDisconnectVcom() {
 }
 
 void CFwUploadTab::OnBridgeSelectHid() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     if (service_ != nullptr && service_->IsConnected()) {
         SetBridgeInterfaceSelection(service_->ActiveTransport() != mfc_tool::core::BridgeTransport::Vcom);
         SetBridgeConnectionUi();
@@ -1190,6 +1216,8 @@ void CFwUploadTab::OnBridgeSelectHid() {
 }
 
 void CFwUploadTab::OnBridgeSelectVcom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     if (service_ != nullptr && service_->IsConnected()) {
         SetBridgeInterfaceSelection(service_->ActiveTransport() != mfc_tool::core::BridgeTransport::Vcom);
         SetBridgeConnectionUi();
@@ -1203,6 +1231,8 @@ void CFwUploadTab::OnBridgeSelectVcom() {
 }
 
 void CFwUploadTab::OnBridgeVcomChanged() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     SaveBridgeVisibleToState();
     if (persist_settings_) {
         persist_settings_();
@@ -1210,6 +1240,8 @@ void CFwUploadTab::OnBridgeVcomChanged() {
 }
 
 void CFwUploadTab::OnBridgeVcomBaudChanged() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     SaveBridgeVisibleToState();
     if (persist_settings_) {
         persist_settings_();
@@ -1217,6 +1249,8 @@ void CFwUploadTab::OnBridgeVcomBaudChanged() {
 }
 
 void CFwUploadTab::OnPortChanged() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     if (loading_) {
         return;
     }
@@ -1228,6 +1262,8 @@ void CFwUploadTab::OnPortChanged() {
 }
 
 void CFwUploadTab::OnPinsChanged() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     if (loading_) {
         return;
     }
@@ -1238,6 +1274,8 @@ void CFwUploadTab::OnPinsChanged() {
 }
 
 void CFwUploadTab::OnEnableHost() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         EnsureHostEnabled();
     } catch (const std::exception& e) {
@@ -1246,6 +1284,8 @@ void CFwUploadTab::OnEnableHost() {
 }
 
 void CFwUploadTab::OnDisableHost() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         if (service_ != nullptr && connected_) {
             service_->I2cDeinit(CurrentPort());
@@ -1262,6 +1302,8 @@ void CFwUploadTab::OnDisableHost() {
 }
 
 void CFwUploadTab::OnLoadImage() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     CFileDialog dlg(TRUE, L"bin", nullptr, OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
                     L"Binary Files (*.bin)|*.bin|All Files (*.*)|*.*||", this);
     if (dlg.DoModal() != IDOK) {
@@ -1279,6 +1321,8 @@ void CFwUploadTab::OnLoadImage() {
 }
 
 void CFwUploadTab::OnConnectTarget() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         EnsureHostEnabled();
 
@@ -1300,7 +1344,7 @@ void CFwUploadTab::OnConnectTarget() {
         options.response_delay_ms = CurrentResponseDelayMs();
         client.SetOptions(options);
 
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
         SetStatusText(L"Waiting for target ISP handshake...");
         SetProgress(0, L"Connect: waiting for target ISP...");
@@ -1334,6 +1378,8 @@ void CFwUploadTab::OnConnectTarget() {
 }
 
 void CFwUploadTab::OnGetDeviceId() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         EnsureHostEnabled();
 
@@ -1354,7 +1400,7 @@ void CFwUploadTab::OnGetDeviceId() {
         options.addr7 = CurrentAddress();
         options.response_delay_ms = CurrentResponseDelayMs();
         client.SetOptions(options);
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
         AppendStatusText(L"Waiting for target ISP handshake...");
         SetTargetReady(false, L"Target: waiting for ISP handshake...");
@@ -1381,15 +1427,18 @@ void CFwUploadTab::OnGetDeviceId() {
 }
 
 void CFwUploadTab::OnProgram() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
-        EnsureHostEnabled();
         if (!firmware_image_data_) {
             throw std::invalid_argument("load firmware image first");
         }
-        const std::vector<std::uint8_t>& image = firmware_image_data_();
+        const std::vector<std::uint8_t> image = firmware_image_data_();
+        (void)mfc_tool::core::CheckedImageLength(image.size(), mfc_tool::core::kMaxIspImageBytes);
         if (image.empty()) {
             throw std::invalid_argument("load firmware image first");
         }
+        EnsureHostEnabled();
         const std::wstring image_path = firmware_image_path_ ? firmware_image_path_() : L"";
 
         cancel_requested_ = false;
@@ -1413,7 +1462,7 @@ void CFwUploadTab::OnProgram() {
         SetStatusText(L"Waiting for target ISP handshake...");
         SetProgress(0, L"Connect: waiting for target ISP...");
         SetTargetReady(false, L"Target: waiting for ISP handshake...");
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
 
         client.ConnectTarget(cancel, poll);
@@ -1435,24 +1484,21 @@ void CFwUploadTab::OnProgram() {
             cancel,
             poll);
 
-        if (cancel_requested_) {
-            SetTargetReady(false, L"Target: program stopped");
-            AppendStatusText(L"Program stopped by user.");
-            if (log_) {
-                log_(L"FW upload stopped by user.");
-            }
-            return;
-        }
-
         SetProgress(100, L"Program: complete");
         SetTargetReady(true, L"Program complete - click Run APROM or program another image");
-        AppendStatusText(L"Program APROM complete. Packet checksum/readback validation passed.");
+        AppendStatusText(L"Program APROM complete. Packet acknowledgements validated.");
         if (log_) {
             log_(L"FW upload Program APROM complete: " + image_path);
         }
         if (persist_settings_) {
             persist_settings_();
         }
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        SetTargetReady(false, L"Target: programming outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
+        SetProgress(progress_.GetPos(), L"Program: outcome unknown, confirmed " +
+            std::to_wstring(e.confirmed_bytes) + L" bytes - recover target before a new session");
     } catch (const std::exception& e) {
         if (cancel_requested_ || IsCancelError(e)) {
             SetTargetReady(false, L"Target: program stopped");
@@ -1469,6 +1515,8 @@ void CFwUploadTab::OnProgram() {
 }
 
 void CFwUploadTab::OnRunAprom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
         EnsureHostEnabled();
 
@@ -1489,7 +1537,7 @@ void CFwUploadTab::OnRunAprom() {
         options.addr7 = CurrentAddress();
         options.response_delay_ms = CurrentResponseDelayMs();
         client.SetOptions(options);
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
         AppendStatusText(L"Waiting for target ISP handshake...");
         SetTargetReady(false, L"Target: waiting for ISP handshake...");
@@ -1505,6 +1553,10 @@ void CFwUploadTab::OnRunAprom() {
         if (log_) {
             log_(L"FW upload Run APROM command sent.");
         }
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        SetTargetReady(false, L"Target: command outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
     } catch (const std::exception& e) {
         if (cancel_requested_ || IsCancelError(e)) {
             SetTargetReady(false, L"Target: Run APROM stopped");
@@ -1518,6 +1570,8 @@ void CFwUploadTab::OnRunAprom() {
 }
 
 void CFwUploadTab::OnResetTarget() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
         EnsureHostEnabled();
 
@@ -1538,7 +1592,7 @@ void CFwUploadTab::OnResetTarget() {
         options.addr7 = CurrentAddress();
         options.response_delay_ms = CurrentResponseDelayMs();
         client.SetOptions(options);
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
         AppendStatusText(L"Waiting for target ISP handshake...");
         SetTargetReady(false, L"Target: waiting for ISP handshake...");
@@ -1554,6 +1608,10 @@ void CFwUploadTab::OnResetTarget() {
         if (log_) {
             log_(L"FW upload Reset Target command sent.");
         }
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        SetTargetReady(false, L"Target: command outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
     } catch (const std::exception& e) {
         if (cancel_requested_ || IsCancelError(e)) {
             SetTargetReady(false, L"Target: reset stopped");
@@ -1588,7 +1646,11 @@ int CFwUploadTab::CurrentPort() const {
 }
 
 int CFwUploadTab::CurrentAddress() const {
-    return mfc_tool::core::ParseInt(GetEditText(addr_edit_)) & 0x7F;
+    const int address = mfc_tool::core::ParseInt(GetEditText(addr_edit_));
+    if (address < 0 || address > 0x7F) {
+        throw std::invalid_argument("I2C target address must be 0x00..0x7F");
+    }
+    return address;
 }
 
 int CFwUploadTab::CurrentSpeedHz() const {

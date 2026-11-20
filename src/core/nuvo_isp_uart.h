@@ -13,7 +13,7 @@ struct NuvoIspUartOptions {
     int response_poll_ms = 20;
     int normal_response_timeout_ms = 5000;
     int long_response_timeout_ms = 25000;
-    int program_retry_count = 10;
+    int program_retry_count = 10; // Source compatibility only; APROM data is never replayed.
 };
 
 struct NuvoIspUartResponse {
@@ -35,6 +35,7 @@ struct NuvoIspUartProgress {
 class NuvoIspUartClient {
 public:
     NuvoIspUartClient() = default;
+    explicit NuvoIspUartClient(mfc_tool::vcom::SerialTransport& transport) : port_(&transport) {}
 
     void Connect(const std::wstring& com_port, std::uint32_t baudrate, int timeout_ms);
     void Disconnect();
@@ -73,8 +74,6 @@ private:
                                         int timeout_ms,
                                         const std::function<bool()>& should_cancel,
                                         const std::function<void()>& on_poll);
-    void SendResendPacket(const std::function<bool()>& should_cancel,
-                          const std::function<void()>& on_poll);
 
     static std::vector<std::uint8_t> BuildPacket(std::uint32_t command,
                                                  std::uint32_t packet_index,
@@ -87,7 +86,8 @@ private:
     static void ThrowIfCancelled(const std::function<bool()>& should_cancel);
 
 private:
-    mfc_tool::vcom::SerialPort port_;
+    mfc_tool::vcom::SerialPort owned_port_;
+    mfc_tool::vcom::SerialTransport* port_ = &owned_port_;
     NuvoIspUartOptions options_;
     std::wstring current_port_;
     std::uint32_t baudrate_ = 115200;

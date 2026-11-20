@@ -57,6 +57,8 @@
     <ClCompile Include="src\main_frame.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\config\ini_manager.cpp"><Filter>Source Files\config</Filter></ClCompile>
     <ClCompile Include="src\core\app_state.cpp"><Filter>Source Files\core</Filter></ClCompile>
+    <ClCompile Include="src\core\firmware_image.cpp"><Filter>Source Files\core</Filter></ClCompile>
+    <ClCompile Include="src\core\aprom_programmer.cpp"><Filter>Source Files\core</Filter></ClCompile>
     <ClCompile Include="src\core\bridge_service.cpp"><Filter>Source Files\core</Filter></ClCompile>
     <ClCompile Include="src\core\nuvo_isp_i2c.cpp"><Filter>Source Files\core</Filter></ClCompile>
     <ClCompile Include="src\core\nuvo_isp_uart.cpp"><Filter>Source Files\core</Filter></ClCompile>
@@ -83,6 +85,9 @@
     <ClInclude Include="src\resource.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\config\ini_manager.h"><Filter>Header Files\config</Filter></ClInclude>
     <ClInclude Include="src\core\app_state.h"><Filter>Header Files\core</Filter></ClInclude>
+    <ClInclude Include="src\core\firmware_image.h"><Filter>Header Files\core</Filter></ClInclude>
+    <ClInclude Include="src\core\aprom_programmer.h"><Filter>Header Files\core</Filter></ClInclude>
+    <ClInclude Include="src\core\operation_session.h"><Filter>Header Files\core</Filter></ClInclude>
     <ClInclude Include="src\core\board_i2c_catalog.h"><Filter>Header Files\core</Filter></ClInclude>
     <ClInclude Include="src\core\bridge_commands.h"><Filter>Header Files\core</Filter></ClInclude>
     <ClInclude Include="src\core\bridge_service.h"><Filter>Header Files\core</Filter></ClInclude>
@@ -95,6 +100,7 @@
     <ClInclude Include="src\core\xmodem_sender.h"><Filter>Header Files\core</Filter></ClInclude>
     <ClInclude Include="src\hid\hid_bridge_client.h"><Filter>Header Files\hid</Filter></ClInclude>
     <ClInclude Include="src\hid\hid_scan.h"><Filter>Header Files\hid</Filter></ClInclude>
+    <ClInclude Include="src\hid\overlapped_io.h"><Filter>Header Files\hid</Filter></ClInclude>
     <ClInclude Include="src\hid\hid_types.h"><Filter>Header Files\hid</Filter></ClInclude>
     <ClInclude Include="src\log\logger.h"><Filter>Header Files\log</Filter></ClInclude>
     <ClInclude Include="src\ui\fw_upload_tab.h"><Filter>Header Files\ui</Filter></ClInclude>

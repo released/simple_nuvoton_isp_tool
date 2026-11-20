@@ -2,6 +2,7 @@
 
 #include <cwctype>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -31,7 +32,12 @@ int ParseInt(const std::wstring& text) {
         ++idx;
     }
 
-    long long value = 0;
+    if (idx == s.size()) {
+        throw std::invalid_argument("integer requires at least one digit");
+    }
+    const auto positive_limit = static_cast<unsigned int>((std::numeric_limits<int>::max)());
+    const auto limit = sign < 0 ? positive_limit + 1u : positive_limit;
+    unsigned int value = 0u;
     for (; idx < s.size(); ++idx) {
         wchar_t ch = s[idx];
         int digit = -1;
@@ -47,10 +53,18 @@ int ParseInt(const std::wstring& text) {
         if (digit >= base) {
             throw std::invalid_argument("invalid digit for base");
         }
-        value = value * base + digit;
+        const auto unsigned_digit = static_cast<unsigned int>(digit);
+        const auto unsigned_base = static_cast<unsigned int>(base);
+        if (value > (limit - unsigned_digit) / unsigned_base) {
+            throw std::out_of_range("integer exceeds the supported range");
+        }
+        value = value * unsigned_base + unsigned_digit;
     }
 
-    return static_cast<int>(value * sign);
+    if (sign < 0 && value == positive_limit + 1u) {
+        return (std::numeric_limits<int>::min)();
+    }
+    return sign * static_cast<int>(value);
 }
 
 std::vector<std::uint8_t> ParseHexBytes(const std::wstring& text) {

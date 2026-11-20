@@ -14,7 +14,7 @@ struct NuvoIspUsbHidOptions {
     int response_poll_ms = 20;
     int normal_response_timeout_ms = 5000;
     int long_response_timeout_ms = 25000;
-    int program_retry_count = 10;
+    int program_retry_count = 10; // Source compatibility only; APROM data is never replayed.
 };
 
 struct NuvoIspUsbHidResponse {
@@ -88,8 +88,6 @@ private:
                                          const std::function<bool()>& should_cancel,
                                          const std::function<void()>& on_poll);
     std::vector<std::uint8_t> BuildWriteReport(const std::vector<std::uint8_t>& packet) const;
-    void SendResendPacket(const std::function<bool()>& should_cancel,
-                          const std::function<void()>& on_poll);
 
     static std::vector<std::uint8_t> BuildPacket(std::uint32_t command,
                                                  std::uint32_t packet_index,

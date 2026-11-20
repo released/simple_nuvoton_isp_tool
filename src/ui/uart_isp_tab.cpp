@@ -12,6 +12,8 @@
 #include <utility>
 
 #include "../core/text_utils.h"
+#include "../core/aprom_programmer.h"
+#include "../core/firmware_image.h"
 #include "layout_utils.h"
 
 namespace {
@@ -47,6 +49,7 @@ enum : UINT {
 };
 
 bool IsCancelError(const std::exception& e) {
+    if (dynamic_cast<const mfc_tool::core::ProgrammingOutcomeUnknown*>(&e) != nullptr) return false;
     return std::string(e.what()).find("cancelled") != std::string::npos ||
         std::string(e.what()).find("canceled") != std::string::npos ||
         std::string(e.what()).find("cancelled") != std::string::npos;
@@ -268,6 +271,9 @@ void CUartIspTab::PopulateBaudCombo() {
 }
 
 void CUartIspTab::UpdateEnableState() {
+    if (operations_ && operations_->OutcomeUnknown()) {
+        SetTargetReady(false, L"Session: programming outcome unknown - no replay");
+    }
     if (!::IsWindow(open_com_btn_.GetSafeHwnd())) {
         return;
     }
@@ -282,9 +288,9 @@ void CUartIspTab::UpdateEnableState() {
     mfc_tool::ui::SafeEnableWindow(close_com_btn_, connected && !busy_);
     mfc_tool::ui::SafeEnableWindow(connect_target_btn_, connected && !busy_);
     mfc_tool::ui::SafeEnableWindow(get_device_btn_, connected && !busy_);
-    mfc_tool::ui::SafeEnableWindow(program_btn_, connected && !busy_ && image_loaded);
-    mfc_tool::ui::SafeEnableWindow(run_aprom_btn_, connected && !busy_);
-    mfc_tool::ui::SafeEnableWindow(reset_target_btn_, connected && !busy_);
+    mfc_tool::ui::SafeEnableWindow(program_btn_, connected && !busy_ && image_loaded && !(operations_ && operations_->OutcomeUnknown()));
+    mfc_tool::ui::SafeEnableWindow(run_aprom_btn_, connected && !busy_ && !(operations_ && operations_->OutcomeUnknown()));
+    mfc_tool::ui::SafeEnableWindow(reset_target_btn_, connected && !busy_ && !(operations_ && operations_->OutcomeUnknown()));
     mfc_tool::ui::SafeEnableWindow(stop_btn_, busy_);
 }
 
@@ -318,14 +324,7 @@ void CUartIspTab::LoadImageFromPath(const std::wstring& path) {
     if (path.empty()) {
         throw std::invalid_argument("select a binary image first");
     }
-    std::ifstream in(std::filesystem::path(path), std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("failed to open binary image");
-    }
-    image_data_.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    if (image_data_.empty()) {
-        throw std::runtime_error("binary image is empty");
-    }
+    image_data_ = mfc_tool::core::ReadFirmwareImage(std::filesystem::path(path));
     state_.image_path = path;
     SetImagePathText();
     SetProgress(0, L"Progress: 0%");
@@ -399,6 +398,11 @@ HBRUSH CUartIspTab::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor) {
 void CUartIspTab::PumpUiMessages() {
     MSG msg;
     while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE) != FALSE) {
+        if (msg.message == WM_QUIT) {
+            operations_->RequestClose();
+            ::PostQuitMessage(static_cast<int>(msg.wParam));
+            break;
+        }
         if (!AfxGetApp()->PreTranslateMessage(&msg)) {
             ::TranslateMessage(&msg);
             ::DispatchMessageW(&msg);
@@ -433,11 +437,15 @@ void CUartIspTab::RefreshSharedImageState() {
 }
 
 void CUartIspTab::OnRefreshCom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     RefreshComPorts();
     UpdateEnableState();
 }
 
 void CUartIspTab::OnOpenCom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         client_.Connect(SelectedComPort(), SelectedBaudrate(), CurrentTimeoutMs());
         AppendStatusText(L"UART opened: " + SelectedComPort() + L", baud=" + std::to_wstring(SelectedBaudrate()));
@@ -454,6 +462,8 @@ void CUartIspTab::OnOpenCom() {
 }
 
 void CUartIspTab::OnCloseCom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     client_.Disconnect();
     SetTargetReady(false, L"Target: not connected");
     AppendStatusText(L"UART closed.");
@@ -464,6 +474,8 @@ void CUartIspTab::OnCloseCom() {
 }
 
 void CUartIspTab::OnLoadImage() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     CFileDialog dlg(TRUE, L"bin", nullptr, OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
                     L"Binary Files (*.bin)|*.bin|All Files (*.*)|*.*||", this);
     if (dlg.DoModal() != IDOK) {
@@ -481,6 +493,8 @@ void CUartIspTab::OnLoadImage() {
 }
 
 void CUartIspTab::OnConnectTarget() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         EnsureUartConnected();
         cancel_requested_ = false;
@@ -494,7 +508,7 @@ void CUartIspTab::OnConnectTarget() {
             }
         } guard{this};
 
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
         SetStatusText(L"Waiting for UART ISP handshake...");
         SetTargetReady(false, L"Target: waiting for UART ISP handshake...");
@@ -514,6 +528,8 @@ void CUartIspTab::OnConnectTarget() {
 }
 
 void CUartIspTab::OnGetDeviceId() {
+    mfc_tool::core::OperationSession::Scope operation(operations_);
+    if (!operation) return;
     try {
         EnsureUartConnected();
         cancel_requested_ = false;
@@ -527,7 +543,7 @@ void CUartIspTab::OnGetDeviceId() {
             }
         } guard{this};
 
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
         client_.ConnectTarget(cancel, poll);
         const std::uint8_t fw = client_.GetFirmwareVersion();
@@ -544,12 +560,15 @@ void CUartIspTab::OnGetDeviceId() {
 }
 
 void CUartIspTab::OnProgram() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
         EnsureUartConnected();
         if (!firmware_image_data_) {
             throw std::invalid_argument("load firmware image first");
         }
-        const std::vector<std::uint8_t>& image = firmware_image_data_();
+        const std::vector<std::uint8_t> image = firmware_image_data_();
+        (void)mfc_tool::core::CheckedImageLength(image.size(), mfc_tool::core::kMaxIspImageBytes);
         if (image.empty()) {
             throw std::invalid_argument("load firmware image first");
         }
@@ -568,7 +587,7 @@ void CUartIspTab::OnProgram() {
         SetStatusText(L"Waiting for UART ISP handshake...");
         SetProgress(0, L"Connect: waiting for UART ISP...");
         SetTargetReady(false, L"Target: waiting for UART ISP handshake...");
-        auto cancel = [this]() -> bool { return cancel_requested_; };
+        auto cancel = [this]() -> bool { return CancellationRequested(); };
         auto poll = [this]() { PumpUiMessages(); };
         client_.ConnectTarget(cancel, poll);
         SetTargetReady(true, L"Target Ready - programming APROM...");
@@ -593,6 +612,12 @@ void CUartIspTab::OnProgram() {
         if (persist_settings_) {
             persist_settings_();
         }
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        SetTargetReady(false, L"Target: programming outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
+        SetProgress(progress_.GetPos(), L"Program: outcome unknown, confirmed " +
+            std::to_wstring(e.confirmed_bytes) + L" bytes - recover target before a new session");
     } catch (const std::exception& e) {
         SetTargetReady(false, IsCancelError(e) ? L"Target: program stopped" : L"Target: program failed");
         AppendStatusText(L"Program failed: " + AnsiToWide(e.what()));
@@ -603,22 +628,34 @@ void CUartIspTab::OnProgram() {
 }
 
 void CUartIspTab::OnRunAprom() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
         EnsureUartConnected();
         client_.RunAprom();
         SetTargetReady(false, L"Target: Run APROM command sent");
         AppendStatusText(L"Run APROM command sent.");
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        SetTargetReady(false, L"Target: command outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
     } catch (const std::exception& e) {
         ::MessageBoxW(m_hWnd, AnsiToWide(e.what()).c_str(), L"Run APROM", MB_ICONERROR | MB_OK);
     }
 }
 
 void CUartIspTab::OnResetTarget() {
+    mfc_tool::core::OperationSession::Scope operation(operations_, true);
+    if (!operation) return;
     try {
         EnsureUartConnected();
         client_.ResetTarget();
         SetTargetReady(false, L"Target: Reset Target command sent");
         AppendStatusText(L"Reset Target command sent.");
+    } catch (const mfc_tool::core::ProgrammingOutcomeUnknown& e) {
+        operations_->MarkOutcomeUnknown();
+        SetTargetReady(false, L"Target: command outcome unknown - no replay");
+        AppendStatusText(AnsiToWide(e.what()));
     } catch (const std::exception& e) {
         ::MessageBoxW(m_hWnd, AnsiToWide(e.what()).c_str(), L"Reset Target", MB_ICONERROR | MB_OK);
     }

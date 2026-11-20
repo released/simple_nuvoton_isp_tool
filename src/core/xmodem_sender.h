@@ -26,6 +26,7 @@ struct XmodemProgress {
 class XmodemSender {
 public:
     XmodemSender() = default;
+    explicit XmodemSender(mfc_tool::vcom::SerialTransport& transport) : port_(&transport) {}
 
     void Connect(const std::wstring& com_port, std::uint32_t baudrate);
     void Disconnect();
@@ -57,7 +58,8 @@ private:
     static void ThrowIfCancelled(const std::function<bool()>& should_cancel);
 
 private:
-    mfc_tool::vcom::SerialPort port_;
+    mfc_tool::vcom::SerialPort owned_port_;
+    mfc_tool::vcom::SerialTransport* port_ = &owned_port_;
     XmodemOptions options_;
     std::wstring current_port_;
     std::uint32_t baudrate_ = 115200;

@@ -9,11 +9,13 @@
 #include <vector>
 
 #include "../core/app_state.h"
+#include "../core/operation_session.h"
 #include "../core/xmodem_sender.h"
 
 class CXmodemTab : public CWnd {
 public:
     BOOL Create(CWnd* parent, const RECT& rect, UINT id);
+    void SetOperationSession(mfc_tool::core::OperationSession* session) { operations_ = session; }
 
     void Bind(std::function<void(const std::wstring&)> logger,
               std::function<const std::vector<std::uint8_t>&()> firmware_image_data,
@@ -68,6 +70,10 @@ private:
     std::vector<std::uint8_t> image_data_;
 
     bool loading_ = false;
+    mfc_tool::core::OperationSession* operations_ = nullptr;
+    bool CancellationRequested() const {
+        return cancel_requested_ || (operations_ != nullptr && operations_->Cancelled());
+    }
     bool busy_ = false;
     bool cancel_requested_ = false;
 

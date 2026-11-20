@@ -245,7 +245,11 @@ The PC tool sends a 65-byte Windows HID report where byte 0 is report ID `0`, an
 
 For bridge self-update, the host sends NuvoISP `CMD_UPDATE_APROM` with `StartAddress=0`. The bootloader maps that to the application base and rejects writes outside the application region.
 
-The PC tool intentionally does not validate the selected binary filename, image size, CRC word, or bridge profile. It behaves like the original Nuvoton ISP host: it loads the user-selected binary and transfers it. Image validity is enforced by the bootloader and application checksum policy.
+The PC tool does not select an MCU profile or validate a binary filename, MCU-specific image size, or application CRC word. The bootloader owns the application mapping, flash capacity and protected regions. Host-side limits only check representation and resource bounds:
+
+- Shared binary loading: nonempty file, at most 64 MiB, and a complete read before replacing the accepted image.
+- NuvoISP I2C/UART/USB HID APROM transfer: existing 1 MiB limit and a 32-bit length/address range; `StartAddress=0` remains unchanged.
+- XMODEM transfer: 32-bit progress/length bounds, SOH 128-byte blocks, CRC or checksum negotiated by the receiver.
 
 ### USB HID ISP Workflow
 
@@ -258,6 +262,15 @@ The PC tool intentionally does not validate the selected binary filename, image 
 7. Click top-level `Load BIN` if no image is loaded.
 8. Click `Program APROM`.
 9. Click `Run APROM` when programming completes.
+
+### Operation And Recovery
+
+- One device action runs at a time across the tabs. The image is captured for that action; image/INI replacement and tab switching are blocked until the handler returns.
+- `Stop` requests cancellation. Closing during an action requests cancellation first, then releases the transport and window after the current operation returns. Already acknowledged data is not rolled back.
+- NuvoISP APROM packets are not resent after an invalid or missing acknowledgement. Timeout, disconnect or cancellation with a write in flight reports **outcome unknown**, including the last acknowledged byte count and attempted packet.
+- An unknown result blocks subsequent programming/run/reset actions for that tool session. Disconnecting or reconnecting does not clear the block. Target state must be reconciled or recovered through the board's supported procedure before starting a new tool session; reconnect alone does not establish successful programming.
+- XMODEM may retransmit the same numbered block within its existing duplicate-block protocol. It never restarts an entire transfer automatically; an unconfirmed block or EOT reports an unknown outcome.
+- Packet acknowledgement is not an independent flash readback or real-board acceptance test.
 
 ## Build PC Tool
 
